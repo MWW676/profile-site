@@ -1,21 +1,25 @@
 import os
 import chromadb
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+from dotenv import load_dotenv
 
+load_dotenv()
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
-client = chromadb.PersistentClient(path="chroma_db")
-collection = client.get_or_create_collection("resume")
+client_ai = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+client_db = chromadb.PersistentClient(path="chroma_db")
+collection = client_db.get_or_create_collection("resume")
 
 
 def get_relevant_chunks(question: str, n_results: int = 3) -> list[str]:
-    result = genai.embed_content(
+    result = client_ai.models.embed_content(
         model="models/gemini-embedding-001",
-        content=question,
-        task_type="retrieval_query",
+        contents=question,
+        config=types.EmbedContentConfig(task_type="retrieval_query"),
     )
     matches = collection.query(
-        query_embeddings=[result["embedding"]],
+        query_embeddings=[result.embeddings[0].values],
         n_results=n_results,
     )
     return matches["documents"][0]

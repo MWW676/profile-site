@@ -1,24 +1,47 @@
 import os
-import google.generativeai as genai
+import logging
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 from app.rag.retrieve import get_relevant_chunks
 
 load_dotenv()
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+client_ai = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+logger = logging.getLogger("uvicorn.error")
 
 with open("app/prompts/ask_me_system.md") as f:
     SYSTEM_PROMPT = f.read()
 
-model = genai.GenerativeModel(
-    model_name="models/gemini-flash-latest",
-    system_instruction=SYSTEM_PROMPT,
-)
+MAX_CONTEXT_CHARS = 6000
+
+
+def build_context(chunks: list[str]) -> str:
+    context = "\n\n".join(chunks)
+    if len(context) > MAX_CONTEXT_CHARS:
+        logger.warning(f"Retrieved context ({len(context)} chars) exceeded cap, truncating")
+        context = context[:MAX_CONTEXT_CHARS]
+    return context
 
 
 def answer_question(question: str) -> str:
     chunks = get_relevant_chunks(question)
-    context = "\n\n".join(chunks)
-
+    context = build_context(chunks)
     prompt = f"Context:\n{context}\n\nQuestion: {question}"
-    response = model.generate_content(prompt)
+
+    response = client_ai.models.generate_content(
+        model="models/gemini-flash-latest",
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+        ),
+    )
+
+    usage = response.usage_metadata
+    logger.info(
+        f"chat request — prompt={usage.prompt_token_count}, "
+        f"candidates={usage.candidates_token_count}, "
+        f"thoughts={getattr(usage, 'thoughts_token_count', 0)}, "
+        f"total={usage.total_token_count}"
+    )
+
     return response.text

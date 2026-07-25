@@ -240,6 +240,67 @@ error-handling gaps are often invisible until something real breaks, which is
 itself a decent argument for testing failure paths deliberately rather than
 only ever testing the case expected to succeed.
 
+## 2026-07-25 — Day 7: token logging, a dead SDK, and a chase worth stopping
+
+**What happened:**
+Added per-request token usage logging and a context-size safety cap to the
+chat pipeline — straightforward, and confirmed working immediately. The rest
+of the day went into two connected rabbit holes: discovering the SDK
+underpinning the whole RAG pipeline was already deprecated, and an extended,
+ultimately unsuccessful attempt to disable Gemini's "thinking" tokens to
+save cost.
+
+**What I decided / how I fixed it:**
+
+*A genuinely dead dependency, not just an old one:*
+- Investigating a `ThinkingConfig` `AttributeError` led to discovering
+  `google-generativeai` — the package used since Day 5 — was deprecated by
+  Google and reached full end-of-life on August 31, 2025. Migrated the whole
+  backend (`ingest.py`, `retrieve.py`, `chat.py`, and `main.py`'s error
+  handling around it) to the current `google-genai` SDK, which uses a
+  different client pattern throughout. Re-ran ingestion from scratch under
+  the new SDK to confirm the migration was clean end-to-end.
+
+*A self-inflicted bug during that migration:*
+- The migrated app crashed with `KeyError: 'GEMINI_API_KEY'` despite the key
+  being present in `.env`. Root cause: `retrieve.py` read the environment
+  variable at import time, but relied on `chat.py` calling `load_dotenv()`
+  first — and Python's top-to-bottom import order meant `retrieve.py`'s
+  import actually ran *before* `chat.py` reached that line. Fixed by having
+  `retrieve.py` call `load_dotenv()` itself, rather than depending on import
+  order for correctness.
+
+*The thinking-disable chase, in full:*
+- `thinking_budget=0` on `gemini-flash-latest` → `400 INVALID_ARGUMENT`
+  (field not supported by this model generation)
+- `thinking_level="low"` (the Gemini-3-appropriate alternative) →
+  Pydantic validation error — the installed SDK version's `ThinkingConfig`
+  schema doesn't define that field at all yet
+- Switched to an explicit, older, documented-compatible model
+  (`gemini-2.5-flash`) → `404`, no longer available to new users
+- Wrote a probe script to test six more candidate models in one batch rather
+  than continuing to guess one at a time → four failed on `429` quota
+  exhaustion, one on `404` deprecation, one on the same `400` invalid-argument
+  as before
+- **Decision: stopped.** No model currently available to this API key
+  supports disabling thinking. Reverted to `gemini-flash-latest` with no
+  thinking config — the one configuration confirmed to work cleanly all
+  session — and removed the probe script.
+
+**Result:** token logging and context capping both working and confirmed;
+thinking-disable investigated thoroughly and conclusively ruled out for now,
+rather than left as a vague unresolved attempt.
+
+**Why / what I'd do differently:**
+The dead-SDK discovery is the more important finding of the two — worth
+remembering to check a dependency's maintenance status occasionally, not
+just pin a version once and assume it stays current. The thinking-token
+chase is a good example of a different lesson: recognizing when to stop
+optimizing is itself a real decision, not a failure. A few hundred tokens
+per request, on a project making occasional test calls, was never going to
+justify the time spent chasing it across seven models — worth noticing that
+threshold earlier next time, rather than after exhausting the list.
+
 ---
 
 <!-- New entries go above this line. Suggested template:

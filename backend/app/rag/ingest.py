@@ -1,25 +1,25 @@
 import os
-os.environ["ANONYMIZED_TELEMETRY"] = "False"
 import time
 import chromadb
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 from app.data.resume_chunks import CHUNKS
 
 load_dotenv()
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+client_ai = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
-client = chromadb.PersistentClient(path="chroma_db")
-collection = client.get_or_create_collection("resume")
+client_db = chromadb.PersistentClient(path="chroma_db")
+collection = client_db.get_or_create_collection("resume")
 
 
 def embed(text: str):
-    result = genai.embed_content(
+    result = client_ai.models.embed_content(
         model="models/gemini-embedding-001",
-        content=text,
-        task_type="retrieval_document",
+        contents=text,
+        config=types.EmbedContentConfig(task_type="retrieval_document"),
     )
-    return result["embedding"]
+    return result.embeddings[0].values
 
 
 def main():

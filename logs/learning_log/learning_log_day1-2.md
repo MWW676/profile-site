@@ -573,8 +573,144 @@ once multiple tools exist for the model to choose between.
 - **Observability** — token usage, latency, error-rate logging per request.
 - **Graceful degradation** — known failure modes get specific, calm
   responses rather than generic crashes (implemented today for rate limits).
-- **Prompt version control** — treating system prompt edits like code changes,
-  reviewed and revertible, not edited live in production.
+## 39. Token usage logging — what to log and why
+
+Every LLM response carries real, exact token counts for that specific
+request (`prompt_token_count`, `candidates_token_count`, `total_token_count`)
+— not estimates. Logging these per request is the foundation for cost
+tracking, anomaly detection, and later, empirically choosing context-size
+tradeoffs rather than guessing them.
+
+## 40. Context window budget — competing consumers
+
+A context window is one fixed total budget shared by the system prompt,
+retrieved context, conversation history, and space reserved for the model's
+own output. Growing any one of these leaves less room for the others —
+"more retrieved chunks" is never free, even when the window is technically
+large enough to fit them.
+
+**Lost in the middle:** LLMs attend more reliably to information at the
+start and end of a long context than to content buried in the middle —
+concrete reason to keep retrieved chunks sorted by relevance (most relevant
+first) rather than treating order as irrelevant.
+
+## 41. Token/context management — industrial checklist
+
+- Match model tier to task difficulty — don't spend a reasoning-heavy
+  model's budget on simple lookup/classification
+- Disable or reduce "thinking" for tasks that don't need multi-step
+  reasoning, where the specific model/SDK combination supports it
+- Cap retrieved context (top-k + char/token limits), tuned empirically
+  against an eval set, not guessed
+- Order retrieved content by relevance to mitigate lost-in-the-middle
+- Use prompt/context caching for large static content reused across calls
+- Manage conversation history with a sliding window or periodic
+  summarization, never unbounded append
+- Set explicit output token limits to bound worst-case cost/latency
+- Log token usage per request
+- Use batch APIs for non-real-time, high-volume workloads
+- Treat context-size and compression decisions as empirical, testable
+  choices, not assumptions — and know when a possible optimization isn't
+  worth the cost of pursuing further (see #49)
+
+## 42. Batch API vs. real-time API
+
+Batch API trades immediacy for cost/throughput: submit many requests
+together, the provider processes them within a window (not instantly,
+often up to ~24 hours) using spare capacity, typically at a significantly
+lower price than the same volume of real-time calls. Right shape for
+large, non-urgent bulk workloads (e.g. reprocessing yesterday's support
+tickets overnight); wrong shape for anything a user is waiting on live,
+like our chatbot.
+
+## 43. Prompt/context caching — what's actually cached, what it saves
+
+Caching saves **inference cost** (re-processing input tokens on every call),
+entirely separate from embedding/vector-search cost. What's cached is a
+processed representation of a *fixed, reused* block of input — a system
+prompt, a large static reference document — kept warm on the provider's
+side so repeat calls reusing that exact block are billed at a much lower
+rate. Only earns its complexity when the fixed block is large and reused
+across many calls; our system prompt is small enough that caching would
+save close to nothing, a deliberate reason to skip it for now.
+
+## 44. Sliding window vs. rolling summarization
+
+**Sliding window:** keep only the last N turns of a conversation verbatim,
+drop anything older — simple, but old context is lost entirely.
+
+**Rolling summarization:** periodically compress older turns into a short
+summary, replace the verbatim history with that summary, keep appending new
+turns on top — preserves the gist of old context at much lower token cost
+than keeping it verbatim.
+
+**Not implemented, and correctly so for now:** our `/api/chat` endpoint is
+stateless, single-turn — there's no accumulating history yet for either
+technique to manage. Relevant the moment multi-turn memory gets added, not
+before; adding either now would solve a problem the project doesn't
+currently have.
+
+## 45. Balancing truncation/summarization against accuracy loss
+
+Same empirical principle as top-k tuning: build a small eval set where
+answers depend on specific detail that compression could plausibly lose,
+run the same questions at different compression levels, and find the most
+aggressive setting that doesn't yet cause measurable accuracy loss on that
+set. General judgment underneath it: summarization preserves gist but loses
+exact detail — safer for tracking conversational flow than for anything
+requiring precise facts, which is exactly why the resume content itself is
+retrieved verbatim (via RAG) rather than summarized.
+
+## 46. Thinking tokens — a hidden cost category
+
+Some current Gemini models perform an internal "thinking"/reasoning step
+before producing the visible answer. Per Google's own documentation,
+`total_token_count` includes these tokens, but `candidates_token_count`
+(the visible output) does not — the discrepancy between `prompt + candidates`
+and `total` in an early Day 7 log line was this hidden cost, confirmed via
+research, not a bug in the logging code. `total_token_count` is the number
+that matters for actual billing/quota regardless of whether a specific SDK
+surfaces the thinking-token field by name.
+
+## 47. SDK lifecycle — reaching end-of-life mid-project
+
+`google-generativeai` (used since Day 5) was discovered to have been
+officially deprecated by Google, reaching full end-of-life August 31, 2025
+— frozen, unmaintained, missing newer features like thinking-mode
+configuration by design. Migrated the whole backend (`ingest.py`,
+`retrieve.py`, `chat.py`) to the current recommended SDK, `google-genai`,
+which uses a different pattern throughout: a `Client` object
+(`genai.Client(api_key=...)`) rather than module-level `genai.configure()`,
+and `client.models.embed_content(...)` / `client.models.generate_content(...)`
+rather than standalone functions. Worth checking a dependency's maintenance
+status occasionally, not just its latest version number — "still gets
+releases" and "actively maintained" aren't the same guarantee.
+
+## 48. Import-order bugs — module self-sufficiency
+
+A real bug hit during the SDK migration: `retrieve.py` read an environment
+variable at import time, but only `chat.py` called `load_dotenv()` — and
+because `chat.py` imported `retrieve.py` *before* its own `load_dotenv()`
+line ran, `retrieve.py` executed first and found the variable unset.
+General lesson: any module that reads an environment variable should call
+`load_dotenv()` itself, rather than relying on some other file having
+already done it first — depending on import order for correctness is
+fragile and breaks silently the moment that order shifts.
+
+## 49. Model availability volatility — knowing when to stop optimizing
+
+Across a single session: one model was already deprecated, a second had
+zero free-tier quota despite being listed as accessible, a third didn't
+support a needed config field via the SDK's validation layer, a fourth
+through seventh (tested via a batch probe script rather than one-by-one)
+each failed for a *different* reason — quota, deprecation, or invalid
+argument. The conclusion — no available model currently supports disabling
+thinking for this API key — was reached by direct, systematic testing, not
+assumed. Recognizing when further pursuit of a minor optimization (a few
+hundred tokens per request, on a project doing occasional test calls) isn't
+worth the accumulating time cost is itself a real engineering judgment call,
+not a failure to solve the problem. Reverted to the last confirmed-working
+configuration rather than continuing to chase alternatives indefinitely.
 
 
 ---
