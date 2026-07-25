@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from app.rag.chat import answer_question
 from app.rag.retrieve import collection
 from app.rag.ingest import main as run_ingestion
-from google.api_core.exceptions import ResourceExhausted
+from google.genai.errors import ClientError
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -25,11 +25,17 @@ app = FastAPI(title="profile-site-backend", lifespan=lifespan)
 def chat(request: ChatRequest):
     try:
         answer = answer_question(request.message)
-    except ResourceExhausted:
-        logger.warning("Gemini rate limit hit for a chat request")
+    except ClientError as e:
+        if "RESOURCE_EXHAUSTED" in str(e):
+            logger.warning("Gemini rate limit hit for a chat request")
+            raise HTTPException(
+                status_code=503,
+                detail="The assistant is a bit busy right now — please try again in a minute.",
+            )
+        logger.exception("Gemini API error answering a chat question")
         raise HTTPException(
-            status_code=503,
-            detail="The assistant is a bit busy right now — please try again in a minute.",
+            status_code=502,
+            detail="The assistant hit an upstream error. Please try again.",
         )
     except Exception:
         logger.exception("Unexpected error answering a chat question")
