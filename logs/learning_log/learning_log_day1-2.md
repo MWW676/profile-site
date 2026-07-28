@@ -706,11 +706,140 @@ through seventh (tested via a batch probe script rather than one-by-one)
 each failed for a *different* reason — quota, deprecation, or invalid
 argument. The conclusion — no available model currently supports disabling
 thinking for this API key — was reached by direct, systematic testing, not
-assumed. Recognizing when further pursuit of a minor optimization (a few
-hundred tokens per request, on a project doing occasional test calls) isn't
-worth the accumulating time cost is itself a real engineering judgment call,
-not a failure to solve the problem. Reverted to the last confirmed-working
-configuration rather than continuing to chase alternatives indefinitely.
+assumed. ## 50. Harness vs. evals — the general distinction
+
+**Evals** are the test cases themselves: questions plus criteria for what
+counts as a correct/acceptable answer. **Harness** is the infrastructure that
+executes those cases and reports results. Same relationship as test cases
+vs. a test runner in traditional software testing (e.g. pytest); the harness
+doesn't know what "correct" means for any given domain, it just runs
+whatever check each case declares — which is what makes the same harness
+reusable across very different projects.
+
+**Designing a harness well, key points:**
+- Pluggable check types (`must_contain` / `must_not_contain` / `any_of`),
+  not hardcoded logic — the harness stays reusable across very different
+  criteria
+- Actionable failure output (what was expected vs. what was actually
+  returned), not just a pass/fail flag
+- Cost/rate-limit awareness — running evals makes real API calls; a small
+  frequent "smoke" subset plus a larger less-frequent full suite is a common
+  pattern
+- CI integration as the natural end state — failing evals blocking a deploy
+  automatically
+- Fitting the *business* context is the actual hard part: the "pass" bar for
+  a resume bot (near-zero tolerance for fabricated professional claims) is
+  entirely different from a creative-writing assistant's (tone/style matter
+  more than factual precision) — the harness's job is staying flexible
+  enough to encode that judgment, not enforcing one universal standard
+
+## 51. Why the check function returns a boolean, not a status string
+
+Separation of concerns: the checking logic decides *what's true*; the
+calling code decides *how to display it*. A boolean is directly reusable
+elsewhere (counting, feeding a CI pass/fail decision) without string
+parsing, which is more fragile (typos, case-sensitivity) and couples
+decision logic to formatting choices that might change later.
+
+## 52. Lexical vs. behavioral checks — which fits which case
+
+**Lexical (string-match)** fits: specific known facts that must appear
+(certifications, tool names, dates); specific known-bad terms that must
+never appear; structural/format checks.
+
+**Behavioral (judge-based, semantic)** fits better when the *property*
+matters more than exact phrasing: does the response stay in character
+under an adversarial prompt (unpredictable wording, but a checkable
+semantic property); faithfulness/groundedness (requires comparing meaning
+against context, not strings); tone/persona consistency; anything a
+keyword blocklist could be trivially paraphrased around.
+
+**A real weakness surfaced this session:** the jailbreak eval case used a
+lexical check (`must_not_contain: ["knock knock", ...]`) for something
+that's fundamentally a behavioral property — it only catches a leaked joke
+that happens to start with a guessed phrase, not the underlying failure
+mode. Flagged as a known, deliberate simplification rather than a real
+defense.
+
+## 53. Other evaluation perspectives beyond lexical/behavioral
+
+- **Human evaluation** — the gold standard, often used to calibrate whether
+  an automated judge itself is trustworthy
+- **Statistical/similarity-based** (BLEU, ROUGE, embedding similarity to a
+  reference) — cheaper than an LLM judge, noisier and less interpretable
+- **Production signals** — thumbs up/down, follow-up rate, abandonment;
+  continuous post-launch measurement, not pre-deployment testing
+- **Adversarial/red-teaming** — deliberate attempts to break the system,
+  distinct from a fixed regression suite that only catches previously-known
+  failure modes
+- **A/B testing** — comparing versions against real business outcomes on
+  live traffic
+- **Operational metrics** (cost, latency) — a real evaluation dimension with
+  its own business-driven pass/fail thresholds, separate from "quality"
+
+## 54. LLM-as-judge and determining a reference answer
+
+For source-grounded RAG specifically, the retrieved chunk itself can serve
+as the reference — the judge checks "is this answer supported by this
+excerpt," no separately authored answer needed. Other approaches: human-
+curated gold answers (most reliable, most expensive, common in high-stakes
+domains); rubric-based scoring for subjective tasks with no single correct
+answer (tone, creativity).
+
+## 55. RAG evaluation metrics, with business-context thresholds
+
+Faithfulness (claims actually supported by context), context recall
+(missed relevant chunks), context precision (irrelevant chunks retrieved),
+refusal accuracy (boundary/safety cases), latency, and cost per query are
+all real, commonly used metrics — but **the acceptable threshold for each is
+a business decision, not a technical one.** A resume bot needs
+near-100% faithfulness because fabricated claims about a real person's
+career are a real reputational problem; a general trivia bot could tolerate
+a much lower bar without meaningful real-world consequence. Dedicated
+open-source tooling exists for this at scale (RAGAS, DeepEval, TruLens) —
+worth knowing about, out of proportion to a 9-chunk resume project today.
+
+## 56. Decomposing eval pipelines at larger scale
+
+Common practice splits evaluation along the same seams as the RAG pipeline
+itself — retrieval (precision/recall of retrieved chunks), augmentation
+(did context fit/get truncated correctly), generation (faithfulness,
+relevancy), safety/boundary (refusal accuracy), and end-to-end (overall
+real-world quality, latency, cost). The payoff: when an end-to-end test
+fails, stage-level evals tell you *where* — a wrong answer from bad
+retrieval needs a different fix than one from the LLM ignoring good
+retrieval.
+
+## 57. Multi-turn reasoning and thought signatures
+
+Multi-turn reasoning means a response depends on context accumulated across
+several exchanges or sequential steps, not just the current message alone.
+A thought signature is Gemini's specific mechanism for this: an opaque
+token representing internal reasoning state, passed into the *next* call so
+the model can continue coherently without recomputing prior reasoning.
+Not relevant to our chatbot currently, since `/api/chat` is deliberately
+stateless/single-turn (confirmed Day 7) — genuinely relevant the moment
+real conversation memory gets added, not before.
+
+## 58. Langfuse — purpose and how it fits alongside evals
+
+An observability platform purpose-built for LLM applications — comparable
+in spirit to Grafana/Datadog for general software, but vertically
+integrated around LLM-specific concepts (prompts, tokens, cost, retrieved
+context) that a generic dashboard has no native notion of. Evals answer
+"does this known test case pass" before shipping; Langfuse answers "what
+actually happened on this one real request" after the fact — genuinely
+different, complementary questions.
+
+**A real gap hit immediately in practice:** the plain `@observe()` decorator
+creates a generic `SPAN` observation, not a `GENERATION` observation — so
+token counts and cost don't appear automatically in the dashboard, since
+Langfuse has no way to know a bare decorated function happens to wrap an
+LLM call specifically. Getting that detail would require explicitly marking
+the observation type and attaching usage data, or a model-specific native
+integration — flagged as a legitimate next step rather than solved today,
+consistent with treating "prove it works" and "make it fully-featured" as
+separate, sequential goals.
 
 
 ---

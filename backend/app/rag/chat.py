@@ -4,6 +4,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from app.rag.retrieve import get_relevant_chunks
+from langfuse import observe
 
 load_dotenv()
 client_ai = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
@@ -22,7 +23,7 @@ def build_context(chunks: list[str]) -> str:
         context = context[:MAX_CONTEXT_CHARS]
     return context
 
-
+@observe()
 def answer_question(question: str) -> str:
     chunks = get_relevant_chunks(question)
     context = build_context(chunks)

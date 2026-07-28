@@ -301,6 +301,63 @@ per request, on a project making occasional test calls, was never going to
 justify the time spent chasing it across seven models — worth noticing that
 threshold earlier next time, rather than after exhausting the list.
 
+## 2026-07-28 — Day 8: eval harness, a self-inflicted false failure, and first Langfuse trace
+
+**What happened:**
+Built a fixed eval set and harness for the resume agent, wired up Langfuse
+tracing, and generated the first real trace in its dashboard. Along the way,
+caught a real bug in the eval logic itself (not the agent), and a second
+round of environment drift similar to the SDK-migration issue from Day 7.
+
+**What I decided / how I fixed it:**
+
+*Eval set logic bug, caught by an actual failing test:*
+- The "where did she study" eval case used `must_contain: ["Nanyang",
+  "NTU"]`, intending "either name counts" but written as AND logic (both
+  required) rather than OR. The agent's answer was correct
+  ("Nanyang Technological University") but failed the check anyway. Added
+  an explicit `any_of` check type to the harness rather than just fixing
+  this one case by hand, so the same "any of these counts" pattern is
+  reusable for future cases.
+
+*Local environment drift, again:*
+- Installing `langfuse` surfaced a pip dependency-conflict warning
+  (`protobuf` version mismatch) traced back to `google-ai-generativelanguage`
+  — a leftover dependency from the `google-generativeai` package removed
+  during the Day 7 SDK migration, but never actually uninstalled from the
+  local `.venv`. Same underlying pattern as the deployment failure two
+  sessions ago (drifted local environment silently differing from a fresh
+  install). This time, rebuilt the `.venv` from scratch rather than patching
+  around the warning, and verified via `pip list` that the old dependency
+  was genuinely gone before moving on.
+
+*Langfuse setup, using the current (v4) SDK confirmed via search first:*
+- Checked current docs before writing any integration code this time,
+  given how many stale-library issues came up on Day 5-7 — correctly found
+  Langfuse had been rewritten into a new major version as recently as
+  March 2026. Used the confirmed-current `@observe()` decorator pattern and
+  environment variable names; got a real trace into the dashboard on the
+  first attempt, no dead ends this time.
+
+**Result:** eval harness at 6/6 after the fix; Langfuse dashboard showing a
+real trace for `answer_question`, including latency and I/O — though not
+token counts or cost, since the plain decorator creates a generic `SPAN`
+rather than a `GENERATION` observation.
+
+**Why / what I'd do differently:**
+The eval bug is a good, concrete example of the Day 6-7 discipline paying
+off directly: rather than assuming the agent was wrong when a test failed,
+checking which layer actually failed (the test's logic, in this case) found
+the real problem in under a minute. The venv-drift repeat is worth
+internalizing as a pattern rather than a one-off: any time a dependency gets
+removed from `requirements.txt`, the local `.venv` should be treated as
+still potentially carrying it until proven otherwise — checking before
+trusting is now the default assumption, not the exception. Checking current
+docs *before* writing integration code (rather than after hitting an error)
+finally paid off this time with a clean first attempt — worth continuing
+deliberately rather than reverting to assuming a library's remembered API
+surface is still accurate.
+
 ---
 
 <!-- New entries go above this line. Suggested template:
