@@ -358,9 +358,81 @@ finally paid off this time with a clean first attempt — worth continuing
 deliberately rather than reverting to assuming a library's remembered API
 surface is still accurate.
 
----
+## 2026-07-30 — Day 9: agent tool-calling, the missing frontend page, and a genuinely tricky gcloud syntax bug
 
-<!-- New entries go above this line. Suggested template:
+**What happened:**
+Upgraded the resume agent from a fixed retrieve-then-generate pipeline to
+real tool-calling (three tools: resume search, project details, a fun
+fact), configured CORS, restructured the backend into routers, and built
+the actual "Ask me" frontend page end to end — including session
+persistence, a scroll-to-bottom fix, and a "new conversation" control. Also
+caught and fixed a real gap in the original 15-day plan (no day had ever
+been assigned to building the Ask-me frontend itself) by folding it into
+Day 9 alongside the deeper agentic work.
+
+**What I decided / how I fixed it:**
+
+*Tool-calling, confirmed against current docs first:*
+- Verified the `generate_content(tools=[python_functions])` automatic
+  function-calling pattern was still current for `google-genai` before
+  writing any code, given how many stale-API issues this project hit on
+  Days 5-8. Paid off — worked cleanly on the first real test.
+
+*Backend restructure:*
+- Split `main.py` into `app/routers/health.py` and `app/routers/chat.py`,
+  moved the CORS origin list out of hardcoded source into an environment
+  variable (`CORS_ORIGINS`), and deduplicated a repeated `MAX_CONTEXT_CHARS`
+  constant into a shared `app/config.py`.
+
+*A genuine React race condition in session persistence:*
+- Two `useEffect` hooks (load-from-storage, save-to-storage) both ran
+  within the same initial render pass; the save effect saw stale (empty)
+  state and immediately overwrote the just-loaded conversation before it
+  ever rendered. Fixed with a `useRef` guard skipping the save effect's
+  very first run. Caught specifically by testing in local dev, where React
+  Strict Mode's effect double-invocation made the bug reliably reproducible
+  — worth remembering that dev-mode behavior isn't always "extra" noise,
+  sometimes it's surfacing a real bug production would have hidden.
+
+*Storage type reconsidered mid-build:*
+- Initially used `localStorage`; user's actual expectation ("clears when I
+  start a fresh visit, persists during one") matched `sessionStorage`
+  semantics much more closely once discussed precisely. Switched.
+
+*Production build caught what dev mode didn't:*
+- `next build` failed on unescaped quote/apostrophe characters in JSX text
+  — a lint rule dev mode never enforces. Good concrete confirmation that
+  testing against the actual production build matters, not just `next dev`.
+
+*A multi-attempt gcloud syntax bug:*
+- `--set-env-vars` with a `CORS_ORIGINS` value containing a comma (two
+  URLs) kept failing across several attempts (splitting the flag onto two
+  lines, fixing a missing backslash, shell-quoting the combined string) —
+  none of which addressed the actual cause, since gcloud does its own
+  internal comma-splitting on the flag's value *after* the shell has
+  already handed it the full string. Diagnosed by reading exactly which
+  fragment the error isolated (a lone URL, no `=` sign) as a signal of
+  where parsing broke, rather than treating the whole flag as uniformly
+  malformed. Fixed with gcloud's `^CHAR^` custom-delimiter syntax.
+
+**Result:** live site's `/ask-me` page confirmed working end-to-end against
+the real deployed backend, including tool-calling, session persistence, and
+the clear-conversation button. **Open item, not yet completed:** the eval
+harness re-run against the new tool-calling behavior was blocked by a
+free-tier rate limit from earlier testing in this same session; deferred
+to later today rather than forced through.
+
+**Why / what I'd do differently:**
+The gcloud bug is the standout lesson of the day — three earlier fix
+attempts each addressed a plausible-sounding but wrong layer (shell
+splitting) before the actual layer (gcloud's own internal parsing) was
+identified, by reading the error's precise wording rather than pattern-
+matching to "probably a quoting issue." Worth generalizing: when a
+plausible fix doesn't work, that's a signal to re-read the error more
+carefully for what it's specifically pointing at, rather than trying a
+nearby variation of the same fix.
+
+---
 
 ## YYYY-MM-DD — <short title>
 

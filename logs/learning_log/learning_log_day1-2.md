@@ -831,15 +831,146 @@ context) that a generic dashboard has no native notion of. Evals answer
 actually happened on this one real request" after the fact — genuinely
 different, complementary questions.
 
-**A real gap hit immediately in practice:** the plain `@observe()` decorator
-creates a generic `SPAN` observation, not a `GENERATION` observation — so
-token counts and cost don't appear automatically in the dashboard, since
-Langfuse has no way to know a bare decorated function happens to wrap an
-LLM call specifically. Getting that detail would require explicitly marking
-the observation type and attaching usage data, or a model-specific native
-integration — flagged as a legitimate next step rather than solved today,
-consistent with treating "prove it works" and "make it fully-featured" as
-separate, sequential goals.
+## 59. Function signatures and tool schemas
+
+A function signature (name, parameters with types, return type) is what the
+SDK reads to build the schema shown to the model — the model only ever sees
+this interface description, never the function's internal code.
+
+## 60. How a model actually requests a tool call
+
+Not plain text, not an HTTP request from the model's side — a distinct
+structured **function_call part** in the API response (tool name + parsed
+arguments), separate from any regular text output. The executed result comes
+back as a matching **function_response part** in a follow-up exchange.
+
+## 61. Automatic Function Calling (AFC) — the execution mechanics
+
+The SDK inspects the response for a function_call part, matches it against
+the real Python callables passed in `tools=[...]`, executes the matching
+one directly, and feeds the return value back to the model automatically —
+all within one `generate_content()` call from the calling code's
+perspective, even though multiple round trips happen underneath.
+
+## 62. Parallel vs. sequential tool calls
+
+A model can request several independent function calls in a single turn
+(all executed and their results returned together), or call one tool,
+observe its result, and decide whether to call a second based on that —
+entirely the model's judgment given the specific question, not something
+the calling code controls directly.
+
+## 63. Token cost of tool-calling — a real multiplier, not free
+
+Tool schemas are sent on every call regardless of whether a tool ends up
+used; the model's function-call request and the tool's return value both
+consume tokens across the underlying multi-step exchange. Concretely
+confirmed this session: tool-calling roughly doubles the real API calls per
+user question versus the earlier fixed pipeline (Day 6) — directly
+responsible for hitting free-tier rate limits faster than before when
+testing multiple questions back-to-back.
+
+## 64. Prompt caching — savings scale with what's being skipped, not just its existence
+
+Caching a small fixed block (e.g. our handful of tool signatures, ~100-200
+tokens) saves a proportionally small absolute amount — real, but not worth
+the added complexity at that size. The technique earns its cost specifically
+once the fixed, reused block is large (a whole reference document, an
+extensive tool schema) — same "does this optimization earn its complexity
+at our actual scale" judgment applied consistently since the Cloud Storage
+and thinking-token decisions earlier.
+
+## 65. LLM calls are fully stateless — no such thing as a model reading external storage
+
+A model has no memory of prior calls and no live connection to any external
+system; everything it needs must be physically present in that call's input
+text, every single time. There's no mechanism for a model to independently
+"go look something up" in cloud storage — caching only ever affects billing
+for reprocessing a fixed block, never removes it from having to logically
+be present in context.
+
+## 66. Middleware, generally
+
+Code that runs on every request/response passing through an app, uniformly,
+regardless of which specific route is being hit — conceptually a checkpoint
+every visitor passes through entering and leaving a building. FastAPI's
+`app.add_middleware(...)` registers this globally; `CORSMiddleware`
+specifically checks the incoming `Origin` header against an allowed list on
+every request and answers browser preflight `OPTIONS` requests directly,
+before route code ever runs.
+
+## 67. CORS configuration should come from environment, not hardcoded source
+
+Same reasoning as secrets: values that differ between local and deployed
+environments (allowed frontend origins) belong in `.env`/deploy-time
+environment variables, read via `os.environ.get(...)`, not hardcoded into
+application code.
+
+## 68. FastAPI routers — the standard growth pattern
+
+Rather than OOP inheritance/subclassing (not a FastAPI convention), the
+real industrial pattern for a growing app is `APIRouter`: each logical
+feature area gets its own file defining a router, included into one
+`main.py` via `app.include_router(...)`. Keeps `main.py` as pure app
+setup/wiring, with route logic organized by feature as the app grows.
+
+## 69. localStorage vs. sessionStorage
+
+Both are browser-only, origin-scoped storage, entirely independent of any
+backend state — restarting a server or redeploying has zero effect on
+either. The real difference is lifespan: `localStorage` persists
+indefinitely until explicitly cleared; `sessionStorage` persists across
+refreshes and navigation within one tab but clears automatically when that
+tab closes — a much closer match to the everyday meaning of "a session"
+than `localStorage` was, once discussed carefully.
+
+## 70. Server-side rendering and browser-only APIs (hydration mismatch)
+
+Next.js renders a page once on the server (no `localStorage`/`sessionStorage`
+exists there) before the browser "hydrates" it client-side. Reading
+browser-only storage too early causes a mismatch between what the server
+rendered and what the client expects. Standard fix: initialize state empty
+(matching the server-rendered version), then load browser-only data inside
+a `useEffect`, which only runs after the component has actually mounted in
+the browser.
+
+## 71. A real React race condition, and the fix pattern
+
+Two `useEffect` hooks — one loading saved state, one saving current state on
+every change — both run within the same initial render pass. The load
+effect's `setState` call doesn't apply synchronously, so the save effect,
+running immediately after in that same pass, still sees the *original*
+(empty) state and overwrites the just-loaded data before it's ever
+rendered. Fixed with a `useRef` flag that makes the save effect a no-op on
+its very first run only, giving the load effect's update a chance to land
+first. Notably, this bug was easier to catch in local dev specifically
+because React Strict Mode double-invokes effects there — the same code is
+less likely to visibly fail in a production build, which is why testing
+against `next build && next start`, not just `next dev`, mattered as its
+own separate check.
+
+## 72. gcloud `--set-env-vars` — escaping values that contain the delimiter
+
+`--set-env-vars` uses commas to separate different `KEY=value` pairs; a
+value that itself contains a comma (e.g. two URLs) gets mis-split, with the
+fragment after the comma read as an invalid new pair. Shell-level quoting
+does not fix this, since it's a separate, later parsing step internal to
+gcloud itself. Fix: gcloud's `^CHAR^` prefix syntax lets you specify a
+different separator character for that one flag
+(e.g. `"^@^KEY1=val1@KEY2=val,with,commas"`), leaving commas inside values
+untouched.
+
+## 73. Debugging technique — reading an error's isolated fragment as a signal
+
+When an error message names a suspiciously small, precisely-isolated
+fragment of a larger input (here: a lone URL, no `=` sign, cut out of a
+much longer flag value), that fragment usually marks exactly where a
+parser's understanding diverged from intent — read as "everything before
+this parsed correctly; this specific piece is where it broke," rather than
+treating the whole argument as uniformly malformed. This framing was what
+pointed directly at "something inside the value is being misread as a
+separator" rather than continuing to chase shell-escaping, which had
+already been ruled out by the location of the failure.
 
 
 ---
@@ -1147,3 +1278,178 @@ naming the distinction rather than blurring it:
   limits) get a specific, honest response rather than a generic crash.
 - **Prompt version control** — the system prompt already lives in its own
   file, tracked like code, rather than edited live in a running system.
+
+---
+
+# Learning log — Day 9
+
+## Function signatures and automatic function calling
+
+A function signature is just the name, typed parameters, and return type —
+the interface, not the implementation — and it's exactly what an SDK reads
+to build the schema shown to an LLM for tool-calling; the model never sees
+a function's actual code. "Automatic function calling" (AFC): pass plain
+Python functions (with docstrings) as `tools=[...]`, and the SDK handles
+everything after the model decides to use one — matching the requested
+tool by name, executing the real function with parsed arguments, and
+feeding the result back to the model automatically, all within one
+`generate_content()` call from the caller's perspective.
+
+## How a tool call actually flows
+
+The model's request to call a tool isn't plain text or an HTTP request on
+its end — it's a structured `function_call` part in the API response
+(tool name + arguments, matching the schema built from the function
+signature). The SDK executes the matching real function and packages the
+return value as a `function_response` part, sent back to the model in an
+automatic follow-up request, before the model writes its final answer.
+
+## Parallel vs. sequential tool calls
+
+A model can request multiple independent tool calls in a single turn if a
+question needs several unrelated lookups — the SDK executes all of them and
+returns all results together before the final answer. Separately, a model
+can also call one tool, see its result, and decide to call a second based
+on that outcome (sequential/chained calling). Which happens is entirely the
+model's judgment given the specific question.
+
+## Token cost of tool-calling — a real multiplier, not free
+
+Every tool-enabled call sends the full tool *schemas* (names + docstrings)
+regardless of whether any tool actually gets used, and each internal
+model→tool→model round trip adds real tokens beyond the visible final
+answer. Confirmed directly: adding tools roughly doubled real API calls per
+user question (tool-selection step + final-answer step) versus the earlier
+fixed pipeline, which is exactly why an early rate-limit hit (a 503, handled
+gracefully per the Day 7 error-handling work) showed up sooner than before
+when firing several test questions back-to-back.
+
+## Where prompt caching's payoff actually comes from
+
+Revisited from Day 7 with a sharper framing: caching's savings scale with
+the *absolute size* of the fixed block being skipped, not with whether
+caching is "supported" in principle. Caching three small tool schemas
+(~100-200 tokens) would save a proportionally tiny, not-worth-the-complexity
+amount — the same category of premature-optimization judgment as the
+Cloud Storage and thinking-token decisions on earlier days.
+
+## CORS — browser same-origin policy
+
+Browsers block JavaScript on one origin (e.g. the frontend's Cloud Run
+domain) from calling a different origin (the backend's) by default, unless
+the backend explicitly allows it. `CORSMiddleware`, given a list of allowed
+origins, adds the correct response headers (or rejects) for every request —
+without this, cross-origin fetch calls from a real deployed frontend fail
+silently, even though everything can look fine when both sides happen to
+run on `localhost` during local testing.
+
+## Middleware, generally
+
+Code that wraps every request/response passing through an app, running
+before the route handler and after it returns, uniformly, regardless of
+which specific route is hit — comparable to a checkpoint every visitor
+passes through entering and leaving a building, not tied to any one room.
+`add_middleware(CORSMiddleware, ...)` registers exactly this kind of
+uniform, cross-cutting check globally rather than requiring origin-checking
+logic to be duplicated inside every individual route.
+
+## Scaling a FastAPI app — routers, not class inheritance
+
+The industrial pattern for a growing API isn't object-oriented subclassing;
+it's `APIRouter` — each logical feature area gets its own file defining a
+router, included into one central `main.py` via `app.include_router(...)`.
+Restructured `/api/chat` and `/health` into `app/routers/` this way,
+specifically because more endpoints (leaderboard, meme-of-the-day, admin)
+are already known to be coming later in the project.
+
+## Centralizing shared constants
+
+Caught a real instance of the same limit (`MAX_CONTEXT_CHARS`) being
+independently defined in two files — moved into a single `app/config.py`
+that both import from. General principle: config/constants shared across
+files should have exactly one source of truth, the same reasoning as
+avoiding duplicated logic.
+
+## Why React state resets when navigating between pages
+
+Next.js's App Router **unmounts** a page's component when navigating away
+and mounts a genuinely new instance on return — `useState` is scoped to a
+component instance, so its data is discarded, not paused. This is why an
+in-memory-only chat history disappeared on switching pages, and why
+surviving navigation requires state to live somewhere outside the
+component's own lifecycle (browser storage, or a provider higher up the
+tree).
+
+## localStorage vs. sessionStorage
+
+Both persist independently of anything server-side (a backend restart or
+redeploy has zero effect on either) — the difference is purely how long the
+browser keeps the data. `localStorage` persists indefinitely until
+explicitly cleared; `sessionStorage` persists across refreshes and
+navigation within one tab, but clears automatically when that tab closes.
+Chose `sessionStorage` specifically because it matches the actual intended
+meaning of "a visit" much more closely than `localStorage` did.
+
+## Server-side rendering and browser-only APIs
+
+Next.js renders once on the server (no `localStorage`/`sessionStorage`
+exists there) before hydrating in the browser — reading browser-only
+storage too early causes a mismatch. Standard fix: render with empty/default
+state matching what the server produced, then load real stored data inside
+a `useEffect`, which only runs after the component has mounted in the
+browser.
+
+## A real race condition from React Strict Mode
+
+Two separate effects — one loading from storage, one saving to storage
+whenever `messages` changed — ran in an order where the save effect fired
+using the *pre-update* state, immediately overwriting the just-loaded data
+with an empty array before the load had visibly taken effect. Fixed with a
+ref-based guard that skips the save effect's very first run. Notably, this
+exact race is *more visible* in local dev specifically because React
+Strict Mode deliberately double-invokes effects to help surface bugs like
+this one — worth testing the actual production build (`next build` +
+`next start`), not just dev mode, as a stronger confirmation a fix
+actually works.
+
+## Sticky positioning for a persistent UI control
+
+`sticky top-0 z-10 bg-canvas` locks an element to the top of the viewport
+once scrolled past, rather than scrolling away with the rest of the page —
+used to keep a "clear conversation" button reachable at all times in a
+growing chat thread. The solid background matters as much as the
+positioning itself, so content scrolling underneath doesn't visually
+overlap the pinned element.
+
+## Auto-scroll-to-latest pattern
+
+A ref attached to an empty marker element at the very end of a message
+list, combined with `scrollIntoView({ behavior: 'smooth' })` inside a
+`useEffect` that runs whenever the message list changes — standard pattern
+for keeping newly arrived content visible in any growing scrollable feed.
+
+## Why testing the production build specifically matters
+
+`next dev` does not enforce the same linting `next build` does — a build
+caught real, blocking errors (unescaped quote characters in JSX) that dev
+mode had been silently accepting the entire time. Since real hosting
+platforms run the equivalent of `next build`, not `next dev`, a feature
+that "works" in local dev isn't actually confirmed until it's been checked
+against a real production build — which is exactly the check that also
+caught the Strict Mode race condition being dev-mode-specific.
+
+## Debugging a cryptic CLI syntax error — reasoning from the exact fragment named
+
+`gcloud run deploy`'s `--set-env-vars` splits its value on commas to
+separate different `KEY=value` pairs — a problem when one variable's own
+value (a comma-separated list of CORS origins) contains a comma itself.
+The error named one small, oddly-isolated fragment (a lone URL with no
+`=`) rather than the whole flag — a strong signal that gcloud had already
+parsed everything *before* that point correctly, and broke specifically at
+the comma inside the URL list. The general lesson: shell-level quoting and
+a command's *own internal* argument parsing are two separate layers that
+can each break independently — quoting a string controls what the shell
+hands to a command, but does nothing about how that command parses the
+string internally afterward. Fixed using gcloud's documented custom-
+delimiter escape syntax (`^@^KEY=value@KEY2=value2`) rather than more
+shell-level quoting, since the actual problem lived in the second layer.
