@@ -120,6 +120,7 @@ export default function ParticlePage() {
         }
       }
 
+
       const positions = pointsObj.geometry.attributes.position.array as Float32Array;
 
       for (let i = 0; i < PARTICLE_COUNT; i++) {
