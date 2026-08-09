@@ -1,39 +1,48 @@
 /**
- * ARCANE ENGINE CONFIGURATION
- * Optimized for M1 2020 Hardware
+ * ARCANE ENGINE CONFIGURATION V12
+ * Optimized for M1 2020 Hardware & Cinema View
  */
 export const ARCANE_CONFIG = {
   particles: {
-    count: 45000,
-    size: 0.25,
+    count: 65000,
+    size: 0.22,
     flowSpeed: 0.045,
     farZ: -35,
     nearZ: 12,
+    // Expanded spawn bounds to saturate 100vw/85vh view
+    spawnWidth: 90,
+    spawnHeight: 55,
   },
   sigil: {
-    radius: 5.8,
-    lineThickness: 0.5, // The thickness of the internal polygon/spoke lines
+    radius: 7.5,
+    lineThickness: 0.45,
+    ringAllocationRatio: 0.10, // 20% to rings, 80% to internal complexity
     stabilityThreshold: 0.15,
-    captureDistance: 10.0,
-    repelDistance: 6.0,
-    jitter: 0.15, // Subtle movement to make lines feel alive
+    captureDistance: 12.0,
+    repelDistance: 7.0,
+    repelStrength: 0.05,  // Extracted from hardcode
+    burstStrength: 2.5,   // Extracted from hardcode
+    jitter: 0.12,
+    freezeDelay: 3000,
     lerpSpeed: 0.25,
-    freezeDelay: 3000, // 3 seconds
+  },
+  physics: {
+    inertia: 0.88,
+    springStrength: 0.12,
+    damping: 0.82,
+    floatAmplitude: 0.15,
+    floatSpeed: 1.5,
   },
   colors: {
-    flow: 0x00d2ff,  // Glowing Light Blue
-    magic: 0xffaa00, // Pulsing Orange-Yellow
-  },
-  ai: {
-    modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-    wasmPath: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm",
-    delegate: "GPU" as const,
+    flow: 0x00d2ff,
+    magic: [0xffaa00, 0xff00ff, 0x00ffcc, 0xa4ff1b, 0xd02d10],
   },
   view: {
-    viewportScale: 0.75, // 75% of screen
-    cameraZ: 20,
-    handScaleX: 38,
-    handScaleY: 28,
-    handScaleZ: 50,
+    viewportWidth: 100,  // vw
+    viewportHeight: 85, // vh
+    cameraZ: 22,
+    handScaleX: 42,
+    handScaleY: 32,
+    handScaleZ: 55,
   }
 };
