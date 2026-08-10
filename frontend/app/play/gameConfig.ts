@@ -27,3 +27,5 @@ export function getLevelConfig(level: number) {
   const flipBackMs = level <= 3 ? Infinity : Math.max(800, 4000 - (level - 3) * 300);
   return { cols, rows, totalCards, bingoCount, flipBackMs };
 }
+
+export const EFFICIENCY_THRESHOLDS = { threeStars: 0.7, twoStars: 0.4 } as const;

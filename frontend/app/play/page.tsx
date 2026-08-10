@@ -9,15 +9,22 @@ import {
   DWELL_MS,
   LEVEL_TRANSITION_MS,
   GRID,
+  EFFICIENCY_THRESHOLDS,
   getLevelConfig,
 } from './gameConfig';
 
 type Point = { x: number; y: number; z: number };
 type Star = { xPct: number; yPct: number; radius: number; baseOpacity: number; phase: number };
 type CardState = 'hidden' | 'flipped' | 'matched';
-type CardData = { id: number; isBingo: boolean; state: CardState; flipStartMs: number | null };
+type CardData = {
+  id: number;
+  isBingo: boolean;
+  state: CardState;
+  flipStartMs: number | null;
+  neighborCount: number;
+};
 type LevelConfig = ReturnType<typeof getLevelConfig>;
-type Transition = { active: boolean; endMs: number; clearedLevel: number };
+type Transition = { active: boolean; endMs: number; clearedLevel: number; efficiency: number };
 
 function makeStars(): Star[] {
   return Array.from({ length: STARFIELD.count }, () => ({
@@ -41,6 +48,22 @@ function drawStars(ctx: CanvasRenderingContext2D, stars: Star[], w: number, h: n
   });
 }
 
+function getNeighborIndices(index: number, cols: number, rows: number): number[] {
+  const col = index % cols;
+  const row = Math.floor(index / cols);
+  const neighbors: number[] = [];
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (dr === 0 && dc === 0) continue;
+      const nr = row + dr, nc = col + dc;
+      if (nr >= 0 && nr < rows && nc >= 0 && nc < cols) {
+        neighbors.push(nr * cols + nc);
+      }
+    }
+  }
+  return neighbors;
+}
+
 function generateLevel(level: number): { cards: CardData[]; config: LevelConfig } {
   const config = getLevelConfig(level);
   const indices = Array.from({ length: config.totalCards }, (_, i) => i);
@@ -49,13 +72,26 @@ function generateLevel(level: number): { cards: CardData[]; config: LevelConfig 
     [indices[i], indices[j]] = [indices[j], indices[i]];
   }
   const bingoSet = new Set(indices.slice(0, config.bingoCount));
-  const cards: CardData[] = Array.from({ length: config.totalCards }, (_, i) => ({
-    id: i,
-    isBingo: bingoSet.has(i),
-    state: 'hidden',
-    flipStartMs: null,
-  }));
+  const cards: CardData[] = Array.from({ length: config.totalCards }, (_, i) => {
+    const isBingo = bingoSet.has(i);
+    const neighborCount = isBingo
+      ? 0
+      : getNeighborIndices(i, config.cols, config.rows).filter((n) => bingoSet.has(n)).length;
+    return { id: i, isBingo, state: 'hidden', flipStartMs: null, neighborCount };
+  });
   return { cards, config };
+}
+
+function computeEfficiency(flipsUsed: number, config: LevelConfig): number {
+  const range = Math.max(1, config.totalCards - config.bingoCount);
+  const raw = 1 - (flipsUsed - config.bingoCount) / range;
+  return Math.max(0, Math.min(1, raw));
+}
+
+function starsForEfficiency(eff: number): number {
+  if (eff >= EFFICIENCY_THRESHOLDS.threeStars) return 3;
+  if (eff >= EFFICIENCY_THRESHOLDS.twoStars) return 2;
+  return 1;
 }
 
 function getHoveredCellIndex(point: Point, config: LevelConfig): number | null {
@@ -66,6 +102,25 @@ function getHoveredCellIndex(point: Point, config: LevelConfig): number | null {
   const row = Math.floor(((point.y - gy0) / (gy1 - gy0)) * config.rows);
   if (col < 0 || col >= config.cols || row < 0 || row >= config.rows) return null;
   return row * config.cols + col;
+}
+
+function drawMirroredText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  font: string,
+  color: string
+) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(-1, 1);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = font;
+  ctx.fillStyle = color;
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
 }
 
 function drawGrid(
@@ -122,10 +177,22 @@ function drawGrid(
       ctx.lineWidth = 1.5;
       ctx.stroke();
 
+      if (card.neighborCount > 0) {
+        const fontSize = Math.floor(Math.min(cellW, cellH) * 0.4);
+        drawMirroredText(
+          ctx,
+          String(card.neighborCount),
+          cx,
+          cy,
+          `700 ${fontSize}px 'JetBrains Mono', monospace`,
+          PALETTE.mintBright
+        );
+      }
+
       if (card.flipStartMs !== null && config.flipBackMs !== Infinity) {
         const fraction = 1 - Math.min(1, (now - card.flipStartMs) / config.flipBackMs);
         ctx.beginPath();
-        ctx.arc(cx, cy, Math.min(cellW, cellH) * 0.25, -Math.PI / 2, -Math.PI / 2 + fraction * 2 * Math.PI);
+        ctx.arc(cx, cy, Math.min(cellW, cellH) * 0.42, -Math.PI / 2, -Math.PI / 2 + fraction * 2 * Math.PI);
         ctx.strokeStyle = PALETTE.countdownRing;
         ctx.lineWidth = 3;
         ctx.stroke();
@@ -159,26 +226,21 @@ function drawFingertipCursor(ctx: CanvasRenderingContext2D, point: Point, w: num
   ctx.shadowBlur = 0;
 }
 
-function drawLevelBanner(ctx: CanvasRenderingContext2D, w: number, h: number, clearedLevel: number) {
+function drawLevelBanner(ctx: CanvasRenderingContext2D, w: number, h: number, clearedLevel: number, efficiency: number) {
   ctx.fillStyle = 'rgba(5, 5, 10, 0.6)';
   ctx.fillRect(0, 0, w, h);
 
-  ctx.save();
-  ctx.translate(w / 2, h / 2);
-  ctx.scale(-1, 1); // counter the outer CSS mirror so text reads correctly
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
+  const stars = starsForEfficiency(efficiency);
+  const starText = '★'.repeat(stars) + '☆'.repeat(3 - stars);
+
   ctx.shadowBlur = 10;
   ctx.shadowColor = PALETTE.cardBingo;
-  ctx.fillStyle = PALETTE.cardBingo;
-  ctx.font = "600 28px 'Space Grotesk', sans-serif";
-  ctx.fillText(`Level ${clearedLevel} cleared!`, 0, -12);
+  drawMirroredText(ctx, `Level ${clearedLevel} cleared!`, w / 2, h / 2 - 30, "600 26px 'Space Grotesk', sans-serif", PALETTE.cardBingo);
   ctx.shadowBlur = 0;
 
-  ctx.fillStyle = PALETTE.mintBright;
-  ctx.font = '13px monospace';
-  ctx.fillText(`Moving to level ${clearedLevel + 1}...`, 0, 18);
-  ctx.restore();
+  drawMirroredText(ctx, starText, w / 2, h / 2, '22px sans-serif', PALETTE.mintBright);
+  drawMirroredText(ctx, `${Math.round(efficiency * 100)}% efficiency`, w / 2, h / 2 + 26, '13px monospace', PALETTE.mintBright);
+  drawMirroredText(ctx, `Moving to level ${clearedLevel + 1}...`, w / 2, h / 2 + 48, '12px monospace', PALETTE.mint);
 }
 
 function smoothHand(prev: Point[] | undefined, raw: Point[]): Point[] {
@@ -197,6 +259,8 @@ export default function Play() {
   const starsRef = useRef<Star[]>([]);
   const dwellRef = useRef<{ index: number | null; startMs: number | null }>({ index: null, startMs: null });
   const transitionRef = useRef<Transition | null>(null);
+  const flipsUsedRef = useRef(0);
+  const scoreRef = useRef(0);
 
   const initial = useRef(generateLevel(1));
   const cardsRef = useRef<CardData[]>(initial.current.cards);
@@ -206,6 +270,7 @@ export default function Play() {
 
   const [level, setLevel] = useState(1);
   const [found, setFound] = useState(0);
+  const [score, setScore] = useState(0);
 
   useEffect(() => {
     starsRef.current = makeStars();
@@ -213,9 +278,35 @@ export default function Play() {
     let animationId: number;
     let localStream: MediaStream | null = null;
 
+    function cascadeReveal(startIndex: number, now: number, config: LevelConfig) {
+      const queue = [startIndex];
+      const visited = new Set<number>([startIndex]);
+      while (queue.length > 0) {
+        const idx = queue.shift()!;
+        const card = cardsRef.current[idx];
+        if (!card || card.isBingo) continue;
+        if (card.state === 'hidden') {
+          card.state = 'flipped';
+          card.flipStartMs = now;
+        }
+        if (card.neighborCount === 0) {
+          getNeighborIndices(idx, config.cols, config.rows).forEach((n) => {
+            if (visited.has(n)) return;
+            visited.add(n);
+            const neighborCard = cardsRef.current[n];
+            if (neighborCard && !neighborCard.isBingo && neighborCard.state === 'hidden') {
+              queue.push(n);
+            }
+          });
+        }
+      }
+    }
+
     function selectCard(index: number, now: number) {
       const card = cardsRef.current[index];
       if (!card || card.state !== 'hidden') return;
+
+      flipsUsedRef.current += 1;
 
       if (card.isBingo) {
         card.state = 'matched';
@@ -223,15 +314,16 @@ export default function Play() {
         setFound(foundRef.current);
 
         if (foundRef.current >= configRef.current.bingoCount) {
+          const efficiency = computeEfficiency(flipsUsedRef.current, configRef.current);
           transitionRef.current = {
             active: true,
             endMs: now + LEVEL_TRANSITION_MS,
             clearedLevel: levelRef.current,
+            efficiency,
           };
         }
       } else {
-        card.state = 'flipped';
-        card.flipStartMs = now;
+        cascadeReveal(index, now, configRef.current);
       }
     }
 
@@ -280,12 +372,17 @@ export default function Play() {
 
         if (ctx) {
           if (transitionRef.current?.active && now >= transitionRef.current.endMs) {
+            const efficiency = transitionRef.current.efficiency;
+            scoreRef.current += Math.round(efficiency * 100);
+            setScore(scoreRef.current);
+
             const nextLevel = levelRef.current + 1;
             const next = generateLevel(nextLevel);
             cardsRef.current = next.cards;
             configRef.current = next.config;
             levelRef.current = nextLevel;
             foundRef.current = 0;
+            flipsUsedRef.current = 0;
             setLevel(nextLevel);
             setFound(0);
             transitionRef.current = null;
@@ -295,11 +392,14 @@ export default function Play() {
 
           if (!transitionRef.current?.active) {
             cardsRef.current.forEach((card) => {
-              if (card.state === 'flipped' && card.flipStartMs !== null && configRef.current.flipBackMs !== Infinity) {
-                if (now - card.flipStartMs >= configRef.current.flipBackMs) {
-                  card.state = 'hidden';
-                  card.flipStartMs = null;
-                }
+              if (
+                card.state === 'flipped' &&
+                card.flipStartMs !== null &&
+                configRef.current.flipBackMs !== Infinity &&
+                now - card.flipStartMs >= configRef.current.flipBackMs
+              ) {
+                card.state = 'hidden';
+                card.flipStartMs = null;
               }
             });
           }
@@ -346,8 +446,9 @@ export default function Play() {
 
           drawGrid(ctx, cardsRef.current, configRef.current, canvas.width, canvas.height, now, hoveredIndex, dwellProgress);
           if (activeHand) drawFingertipCursor(ctx, activeHand[8], canvas.width, canvas.height);
+
           if (transitionRef.current?.active) {
-            drawLevelBanner(ctx, canvas.width, canvas.height, transitionRef.current.clearedLevel);
+            drawLevelBanner(ctx, canvas.width, canvas.height, transitionRef.current.clearedLevel, transitionRef.current.efficiency);
           }
         }
       }
@@ -368,11 +469,11 @@ export default function Play() {
       <div className="flex items-center justify-between mb-2">
         <h1 className="font-display text-3xl font-semibold">Play</h1>
         <p className="font-mono text-sm text-sage">
-          Level {level} — {found}/{configRef.current.bingoCount} found
+          Level {level} — {found}/{configRef.current.bingoCount} found — Score {score}
         </p>
       </div>
       <p className="text-sage mb-8">
-        Hover your fingertip over a card and hold to flip it. Find every bingo card to advance.
+        Hover to reveal. Numbers show nearby bingo cards — deduce, don&apos;t guess.
       </p>
 
       <div className="relative w-full max-w-xl aspect-video rounded-lg overflow-hidden">
