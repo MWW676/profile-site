@@ -466,19 +466,26 @@ export default function Play() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
-        <h1 className="font-display text-3xl font-semibold">Play</h1>
-        <p className="font-mono text-sm text-sage">
-          Level {level} — {found}/{configRef.current.bingoCount} found — Score {score}
-        </p>
-      </div>
-      <p className="text-sage mb-8">
+      <h1 className="font-display text-3xl font-semibold mb-2">Play</h1>
+      <p className="text-sage mb-4">
         Hover to reveal. Numbers show nearby bingo cards — deduce, don&apos;t guess.
       </p>
 
-      <div className="relative w-full max-w-xl aspect-video rounded-lg overflow-hidden">
-        <video ref={videoRef} className="hidden" muted playsInline />
-        <canvas ref={canvasRef} className="w-full h-full -scale-x-100" />
+      <div className="flex flex-wrap gap-3 mb-8 font-mono text-xs">
+        <span className="bg-mint-soft text-ink px-3 py-1 rounded-full">Level {level}</span>
+        <span className="bg-mint-soft text-ink px-3 py-1 rounded-full">
+          {found}/{configRef.current.bingoCount} found
+        </span>
+        <span className="bg-mint-soft text-ink px-3 py-1 rounded-full">Score {score}</span>
+      </div>
+
+      <div className="relative left-1/2 -translate-x-1/2 w-screen flex justify-center">
+        <div className="w-[85vw] max-w-5xl">
+          <div className="relative w-full aspect-video rounded-lg overflow-hidden">
+            <video ref={videoRef} className="hidden" muted playsInline />
+            <canvas ref={canvasRef} className="w-full h-full -scale-x-100" />
+          </div>
+        </div>
       </div>
     </div>
   );

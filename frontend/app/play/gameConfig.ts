@@ -12,10 +12,10 @@ export const PALETTE = {
 export const SMOOTHING = 0.5;
 export const STARFIELD = { count: 150 } as const;
 export const DWELL_MS = 600;
-export const LEVEL_TRANSITION_MS = 900;
+export const LEVEL_TRANSITION_MS = 2000;
 
 export const GRID = {
-  margin: 0.04,
+  margin: 0.09,
   gap: 0.01,
 } as const;
 
