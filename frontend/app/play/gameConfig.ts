@@ -15,7 +15,7 @@ export const DWELL_MS = 600;
 export const LEVEL_TRANSITION_MS = 2000;
 
 export const GRID = {
-  margin: 0.09,
+  margin: 0.16,
   gap: 0.01,
 } as const;
 
