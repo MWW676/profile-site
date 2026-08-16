@@ -438,8 +438,83 @@ nearby variation of the same fix.
 
 **What happened:**
 
+## 2026-08-02 — Day 10-11: hand-tracking, a game redesign mid-flight, and knowing where software's limits are
+
+**What happened:**
+Built the standalone MediaPipe hand-tracking demo (Day 10), then evolved it
+significantly further than originally scoped: a gesture-selection
+comparison, a cosmic visual overhaul, and — the bulk of the actual work — a
+full card-flip game (Day 11) that got redesigned twice mid-build in
+response to real playtesting feedback, landing on a Minesweeper-inspired
+deduction mechanic considerably better than the original concept.
+
 **What I decided / how I fixed it:**
 
-**Why / what I'd do differently:**
+*A retracted diagnosis, worth recording honestly:*
+- Proposed a specific root cause (a React Strict Mode race condition) for a
+  camera-staying-on report, and shipped a defensive fix for it — but the
+  original behavior turned out to already be correct; the "bug" didn't
+  exist. Flagged directly rather than left implicit, since presenting an
+  unverified theory as settled fact was a real process mistake worth
+  learning from, not just a footnote.
 
--->
+*Gesture selection, chosen by actual comparison, not assumption:*
+- Built a side-by-side test page comparing pinch, poke, and fist-clench as
+  candidate "select" gestures before committing to one. Pinch won on
+  precision, but even it felt unresponsive as a *double*-tap — the real fix
+  was recognizing double-tap was the wrong interaction shape for this task
+  entirely (borrowed from desktop/touch conventions with no reason to
+  transfer), not further threshold tuning. Landed on hover-dwell instead
+  as the primary mechanic, which tested as meaningfully more responsive.
+
+*A significant, two-stage game redesign, driven by real playtesting:*
+- The first working version (find K bingo cards among a grid, no
+  information on wrong flips) was provably a guaranteed win via exhaustive
+  scanning — boring, not because of missing polish, but because of a
+  structural flaw: zero cost or information on a wrong flip. Considered
+  several fixes (hazard cards, timers, hard flip limits) before landing on
+  the actual right one: Minesweeper-style adjacency numbers, which fix the
+  root cause (no information) rather than patching around the symptom
+  (no risk). Added flood-fill cascade reveals and a min/max-bounded
+  efficiency score as natural extensions of the same mechanic.
+
+*Two-hand support and identity tracking:*
+- Fixed a hand-tracking flicker (assumed at first to need bigger rendering)
+  by tracking both hands and using MediaPipe's own handedness label for
+  per-hand identity across frames, rather than array index, which isn't
+  stable frame to frame.
+
+*Layout bugs, both diagnosed correctly on the first real attempt:*
+- Canvas text rendered mirrored due to the outer CSS flip applied for
+  selfie-view — fixed with a small reusable counter-transform helper,
+  reused once the same issue reappeared in a second location.
+- The game board appeared off-center because `mx-auto` silently fails to
+  center an element wider than its constrained parent — fixed with the
+  standard viewport-breakout CSS pattern rather than trial-and-error
+  margin adjustments.
+
+*A real hardware limit, correctly identified through direct measurement:*
+- Persistent tracking instability at one edge of the play area was
+  investigated with actual on-screen coordinate debugging rather than
+  continued guessing — revealed two distinct physical causes (self-
+  occlusion for one hand, genuine camera field-of-view edge degradation for
+  the other), neither fixable in software. Stopped iterating once this was
+  confirmed with evidence, rather than continuing to adjust config values
+  against a problem no config value could solve.
+
+**Result:** a genuinely more interesting, replayable game than originally
+planned, two-hand tracking with stable per-hand identity, and an honest,
+evidence-based understanding of where the current hand-tracking setup's
+real limits are.
+
+**Why / what I'd do differently:**
+The retracted camera-bug diagnosis is worth sitting with directly: proposing
+a plausible, confident-sounding theory and shipping a fix for it, without
+first confirming the bug was real, cost a round trip and (mildly) obscured
+what was actually true. The later camera field-of-view diagnosis did this
+correctly — instrumented first, concluded second — and is the model worth
+repeating: when a root cause isn't already obvious, get real evidence
+before proposing (or trusting) a specific explanation, rather than
+pattern-matching to the most recent similar-sounding lesson.
+
+---

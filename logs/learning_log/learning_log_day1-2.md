@@ -1453,3 +1453,178 @@ hands to a command, but does nothing about how that command parses the
 string internally afterward. Fixed using gcloud's documented custom-
 delimiter escape syntax (`^@^KEY=value@KEY2=value2`) rather than more
 shell-level quoting, since the actual problem lived in the second layer.
+
+---
+
+# Learning log — Day 10 & Day 11: hand-tracking and the gesture-controlled game
+
+## MediaPipe Hand Landmarker fundamentals
+
+Detects 21 fixed points per hand (fingertips, knuckles, wrist), returned as
+normalized `(x, y, z)` — `x`/`y` as fractions (0-1) of the video frame's
+width/height, `z` as rough relative depth. Landmark 8 is specifically the
+index fingertip. Runs entirely client-side via WebAssembly (`delegate:
+'GPU'` routes the actual computation through WebGL) — no video frame ever
+leaves the browser, which matters for both latency and privacy. Internally
+a two-stage pipeline: a lightweight palm detector finds a rough hand
+location across the full frame, then a precise landmark model runs only on
+that small cropped region — keeps per-frame cost low once a hand is already
+being tracked.
+
+## requestAnimationFrame syncs to the display, not a fixed timer
+
+Fires in step with the actual screen refresh rate (commonly 60Hz, can be
+higher), not a chosen interval — the detection loop's frequency is
+determined by the visitor's own display, not by us.
+
+## Choosing a selection gesture — measured, not assumed
+
+Directly compared three candidate "select" gestures (pinch-close, forward
+poke via z-depth, fist-clench via MediaPipe's separate Gesture Recognizer
+task) using a real side-by-side test page before committing to one. Pinch
+won on precision, but a *double*-pinch requirement still felt unresponsive
+— the actual fix was reconsidering the gesture's shape entirely (single
+pinch, not double), not further tuning thresholds. General lesson: a
+UX complaint about "responsiveness" isn't always a detection-accuracy
+problem — sometimes the interaction pattern itself is the wrong shape for
+the task, borrowed from a different context (double-click/double-tap is a
+desktop/touch convention with no inherent reason to transfer to gesture
+control).
+
+## Landmark smoothing — damping jitter without adding real lag
+
+Per-frame landmark coordinates are noisy even when a hand is still enough
+to cause a computed value (like a pinch-distance ratio) to flicker across a
+threshold repeatedly. Fixed with exponential smoothing — blending each new
+raw reading with the previous *smoothed* value (50/50 in this project) —
+before using the coordinates for anything, both detection logic and
+drawing.
+
+## Multi-hand tracking and identity across frames
+
+With `numHands: 1`, a second hand entering the frame forces the model to
+arbitrarily pick one, causing visible flicker as confidence shifts between
+them. Fixed by tracking both (`numHands: 2`) and identifying each by
+MediaPipe's own handedness label (`Left`/`Right`), not array index — index
+order across frames isn't guaranteed stable, but the label is, which is
+what actually stopped the flicker (rather than the increased render size
+initially assumed to be the fix).
+
+## Canvas hand-skeleton rendering
+
+MediaPipe's 21 landmarks have a fixed, well-known connectivity graph
+(which joint connects to which) — hardcoded once as a constant list of
+index pairs, since it reflects a stable anatomical mapping unrelated to API
+version. Drawing lines between connected pairs plus dots at each joint,
+with a `shadowBlur`/`shadowColor` glow, over a dark starfield background
+instead of raw video, produces the "digitized hand" visual — raw video is
+hidden entirely (kept only as MediaPipe's detection input, not shown).
+
+## Starfield background — generate once, animate cheaply
+
+Star positions/sizes are randomized once on mount and stored in a ref, not
+regenerated per frame (which would look like flickering noise, not a
+starfield). Per-frame cost is just reading stored positions and computing a
+cheap sine-based twinkle offset — expensive randomness happens once,
+cheap animation happens every frame.
+
+## Grouped config objects over flat constant lists
+
+A later revision of the shared config file organized constants by concern
+(`PALETTE`, `PINCH`, `HOVER`, `STARFIELD`) rather than a flat list of
+similarly-prefixed names — genuinely easier to extend (adding `BURST` or
+`DEPTH` groups for future features) and reduces the chance of a stray
+unrelated constant getting lost among unrelated ones.
+
+## Minesweeper-style deduction as a fix for a "guaranteed win" game design
+
+The root problem with the first working version of the card game wasn't
+difficulty tuning — it was that flipping a wrong card carried zero
+information *or* cost, making exhaustive row-by-row scanning a completely
+safe, if boring, winning strategy. The fix that actually addressed the root
+cause (rather than patching around it with a hazard card or a hard flip
+limit) was adding real information: revealing, on every non-bingo card
+flip, the count of bingo cards among its 8 neighboring cells — the same
+core mechanic as Minesweeper's numbers. This converts every flip from
+"blind guess" into "evidence," making deduction genuinely possible and
+rewarding, without needing any punishing failure state.
+
+## Flood-fill cascade reveal (BFS), and "free" information
+
+A card with zero bingo neighbors auto-reveals its own neighbors too
+(cascading further through any of *those* that are also zero, stopping at
+any non-zero "boundary" cell) — the classic Minesweeper open-area reveal.
+Implemented as a breadth-first search with a visited-set to avoid
+reprocessing. Deliberately made these cascade-revealed cells **not** count
+against the player's flip total — only the one card they explicitly
+selected does — mirroring Minesweeper's own convention that finding an
+open area is a reward, not a cost.
+
+## A simple, honest efficiency score from min/max bounds
+
+`efficiency = 1 - (flipsUsed - bingoCount) / (totalCards - bingoCount)`,
+clamped to 0-1: the theoretical best case (every flip is a bingo card) and
+worst case (the whole grid) bound a genuinely meaningful score without
+needing to solve for a mathematically true optimal-play minimum, which
+would be a much harder problem. Good enough to reward actual deduction
+over brute force, cheap to compute from numbers already tracked.
+
+## Refs vs. React state for high-frequency game data
+
+Card state, timers, and per-frame tracking data live in refs, not
+`useState` — since the whole board is redrawn on canvas every animation
+frame regardless, there's no reason to also trigger a React re-render 60
+times a second for data nothing in the DOM directly reads. Only the couple
+of values actually displayed as DOM text (level, score, found count) are
+real state.
+
+## Fixing mirrored canvas text
+
+`-scale-x-100` (CSS) mirrors an entire canvas element for a natural
+selfie-view — correct for symmetric shapes (circles, grid lines) but
+visibly wrong for text. Fixed with a small reusable helper that temporarily
+counter-transforms the canvas's own coordinate system (`ctx.save()` →
+translate to the text's position → `ctx.scale(-1, 1)` → draw at the new
+origin → `ctx.restore()`) rather than fighting the outer CSS mirror
+directly — used consistently for both the level-clear banner and the
+in-cell adjacency numbers once the same bug appeared in a second place.
+
+## Two independent coordinate systems: display size vs. detection space
+
+A common point of confusion worth having settled clearly: how large a
+canvas is rendered on screen (`85vw`, CSS) has zero effect on tracking
+quality or coordinate values — MediaPipe reports hand position as a
+fraction (0-1) of the raw camera frame, entirely independent of display
+size. The actual lever for keeping game elements inside a reliably-tracked
+region is the *normalized* margin reserved in that 0-1 space, not anything
+about how big the canvas looks.
+
+## CSS centering failure when a child is wider than its constrained parent
+
+`mx-auto` only centers an element correctly when it's *narrower* than its
+parent. The site's `<main>` container is capped at `max-w-3xl`; sizing the
+game board to `85vw` made it wider than that parent, so auto-margins
+collapsed to zero rather than centering — left-aligning it with wherever
+the parent's content started, with unconstrained overflow to the right.
+Fixed with the standard "viewport breakout" technique: an outer wrapper
+sized to the true viewport (`w-screen`) and centered relative to it via
+`relative left-1/2 -translate-x-1/2` (shift right by half the viewport,
+then left by half of its own now-full width), with the actual desired
+sizing applied to an inner element centered within that wrapper.
+
+## Physical hardware limits vs. code bugs — a real, correctly diagnosed distinction
+
+Persistent tracking instability at one edge of the play area was
+investigated directly (temporarily displaying the raw landmark coordinate
+on-screen while testing) rather than continuing to guess at config values.
+The result: two genuinely different physical causes — one hand's reach
+being blocked by self-occlusion (the arm crossing in front of the body),
+and normal model-confidence degradation near the true edge of the camera's
+field of view for the other. Neither is fixable by adjusting margins,
+canvas size, or any other code-level change — a good, concrete example of
+recognizing when a persistent issue has reached the boundary of what
+software can address, and confirming that boundary with direct evidence
+rather than continuing to iterate blindly. Notably contrasts with an
+earlier, unverified bug diagnosis in this same project (the Day 10 camera
+theory that turned out to be unnecessary) — this time, the claim was
+checked with real instrumentation before being treated as the answer.
