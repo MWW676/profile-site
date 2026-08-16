@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import { ARCANE_CONFIG } from './arcaneConfig';
@@ -8,7 +8,6 @@ import { ARCANE_CONFIG } from './arcaneConfig';
 export default function ArcaneSigilCinemaV12() {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [status, setStatus] = useState('Arcane Engine Online');
 
   useEffect(() => {
     let animationId: number;
@@ -29,7 +28,7 @@ export default function ArcaneSigilCinemaV12() {
 
     let sigilGeom: { type: 'circle' | 'line', p1?: THREE.Vector3, p2?: THREE.Vector3, r?: number }[] = [];
     const colorFlow = new THREE.Color(colors.flow);
-    let currentMagicColor = new THREE.Color(colors.magic[0]);
+    const currentMagicColor = new THREE.Color(colors.magic[0]);
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 150);
