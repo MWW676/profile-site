@@ -1,5 +1,6 @@
 'use client';
 
+
 import { useEffect, useRef, useState } from 'react';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import {
