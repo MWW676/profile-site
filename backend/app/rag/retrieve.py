@@ -1,4 +1,5 @@
 import os
+import json
 import chromadb
 from google import genai
 from google.genai import types
@@ -23,3 +24,4 @@ def get_relevant_chunks(question: str, n_results: int = 3) -> list[str]:
         n_results=n_results,
     )
     return matches["documents"][0]
+
