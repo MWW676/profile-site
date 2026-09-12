@@ -1,6 +1,6 @@
 from app.rag.chat import answer_question
 from app.rag.eval_set import EVAL_CASES
-
+import time
 
 def check(case: dict, answer: str) -> tuple[bool, str]:
     answer_lower = answer.lower()
@@ -20,6 +20,7 @@ def main():
     passed = 0
     for case in EVAL_CASES:
         answer = answer_question(case["question"])
+        time.sleep(30)  # Wait 30 seconds between requests to avoid rate limiting
         ok, reason = check(case, answer)
         status = "PASS" if ok else "FAIL"
         print(f"[{status}] {case['question']}")

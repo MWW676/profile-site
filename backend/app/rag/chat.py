@@ -4,7 +4,8 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from langfuse import observe
-from app.rag.tools import search_resume, get_project_details, get_fun_fact
+from app.rag.tools import search_resume
+from app.rag.retry import call_with_retry
 
 load_dotenv()
 client_ai = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
@@ -16,13 +17,16 @@ with open("app/prompts/ask_me_system.md") as f:
 
 @observe()
 def answer_question(question: str) -> str:
-    response = client_ai.models.generate_content(
+    response = call_with_retry(
+        client_ai.models.generate_content,
         model="models/gemini-flash-latest",
         contents=question,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
-            tools=[search_resume, get_project_details, get_fun_fact],
+            tools=[search_resume],
         ),
+        max_attempts=2,
+        base_delay=1.0,
     )
 
     usage = response.usage_metadata

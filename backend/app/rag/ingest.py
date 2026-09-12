@@ -5,6 +5,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from app.data.resume_chunks import CHUNKS
+from app.rag.retry import call_with_retry
 
 load_dotenv()
 client_ai = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
@@ -14,7 +15,8 @@ collection = client_db.get_or_create_collection("resume")
 
 
 def embed(text: str):
-    result = client_ai.models.embed_content(
+    result = call_with_retry(
+        client_ai.models.embed_content,
         model="models/gemini-embedding-001",
         contents=text,
         config=types.EmbedContentConfig(task_type="retrieval_document"),

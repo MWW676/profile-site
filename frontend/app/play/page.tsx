@@ -1,7 +1,6 @@
 'use client';
 
-
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import {
   PALETTE,
@@ -13,6 +12,11 @@ import {
   EFFICIENCY_THRESHOLDS,
   getLevelConfig,
 } from './gameConfig';
+
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  'https://profile-site-backend-63802277247.us-central1.run.app';
+const PLAYER_NAME_KEY = 'play-player-name';
 
 type Point = { x: number; y: number; z: number };
 type Star = { xPct: number; yPct: number; radius: number; baseOpacity: number; phase: number };
@@ -272,8 +276,66 @@ export default function Play() {
   const [level, setLevel] = useState(1);
   const [found, setFound] = useState(0);
   const [score, setScore] = useState(0);
+  const [playerName, setPlayerName] = useState<string | null>(null);
+  const [nameInput, setNameInput] = useState('');
+  const [existingScore, setExistingScore] = useState<number | null>(null);
+  const [leaderboard, setLeaderboard] = useState<[string, number][]>([]);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const showLeaderboardRef = useRef(false);
 
   useEffect(() => {
+    showLeaderboardRef.current = showLeaderboard;
+  }, [showLeaderboard]);
+
+  const fetchLeaderboard = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/leaderboard`);
+      if (!res.ok) {
+        console.error('Leaderboard fetch failed:', res.status, await res.text());
+        return;
+      }
+      const data = await res.json();
+      setLeaderboard(data.leaderboard ?? []);
+    } catch (err) {
+      console.error('Leaderboard fetch error:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem(PLAYER_NAME_KEY);
+    if (saved) setPlayerName(saved);
+    fetchLeaderboard();
+  }, [fetchLeaderboard]);
+
+  function submitName() {
+    const trimmed = nameInput.trim();
+    if (!trimmed) return;
+    sessionStorage.setItem(PLAYER_NAME_KEY, trimmed);
+    setPlayerName(trimmed);
+  }
+
+  useEffect(() => {
+    const trimmed = nameInput.trim();
+    if (!trimmed) {
+      setExistingScore(null);
+      return;
+    }
+    const timeout = setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/score/${encodeURIComponent(trimmed)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setExistingScore(data.score ?? null);
+        }
+      } catch {
+        // non-critical, just skip the informational hint this time
+      }
+    }, 500);
+    return () => clearTimeout(timeout);
+  }, [nameInput]);
+
+  useEffect(() => {
+    if (!playerName) return;
     starsRef.current = makeStars();
     let cancelled = false;
     let animationId: number;
@@ -377,6 +439,21 @@ export default function Play() {
             scoreRef.current += Math.round(efficiency * 100);
             setScore(scoreRef.current);
 
+            if (playerName) {
+              fetch(`${API_URL}/api/score`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: playerName, score: scoreRef.current }),
+              })
+                .then(async (res) => {
+                  if (!res.ok) {
+                    console.error('Score submit failed:', res.status, await res.text());
+                  }
+                  return fetchLeaderboard();
+                })
+                .catch((err) => console.error('Score submit error:', err));
+            }
+
             const nextLevel = levelRef.current + 1;
             const next = generateLevel(nextLevel);
             cardsRef.current = next.cards;
@@ -426,7 +503,7 @@ export default function Play() {
           let hoveredIndex: number | null = null;
           let dwellProgress = 0;
 
-          if (!transitionRef.current?.active && activeHand) {
+          if (!transitionRef.current?.active && !showLeaderboardRef.current && activeHand) {
             hoveredIndex = getHoveredCellIndex(activeHand[8], configRef.current);
             if (hoveredIndex !== null && cardsRef.current[hoveredIndex]?.state === 'hidden') {
               if (dwellRef.current.index !== hoveredIndex) {
@@ -441,7 +518,7 @@ export default function Play() {
             } else {
               dwellRef.current = { index: null, startMs: null };
             }
-          } else if (!activeHand) {
+          } else if (!activeHand || showLeaderboardRef.current) {
             dwellRef.current = { index: null, startMs: null };
           }
 
@@ -463,31 +540,99 @@ export default function Play() {
       cancelAnimationFrame(animationId);
       localStream?.getTracks().forEach((t) => t.stop());
     };
-  }, []);
+  }, [playerName, fetchLeaderboard]);
 
   return (
     <div>
       <h1 className="font-display text-3xl font-semibold mb-2">Play</h1>
-      <p className="text-sage mb-4">
-        Hover to reveal. Numbers show nearby bingo cards — deduce, don&apos;t guess.
-      </p>
 
-      <div className="flex flex-wrap gap-3 mb-8 font-mono text-xs">
-        <span className="bg-mint-soft text-ink px-3 py-1 rounded-full">Level {level}</span>
-        <span className="bg-mint-soft text-ink px-3 py-1 rounded-full">
-          {found}/{configRef.current.bingoCount} found
-        </span>
-        <span className="bg-mint-soft text-ink px-3 py-1 rounded-full">Score {score}</span>
-      </div>
+      {!playerName ? (
+        <div className="max-w-sm mx-auto mt-12 bg-canvas border border-hairline rounded-lg p-6 text-center">
+          <p className="text-ink mb-4">Enter a name to join the leaderboard</p>
+          <input
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && submitName()}
+            placeholder="Your name"
+            maxLength={20}
+            className="w-full bg-canvas border border-hairline rounded-lg px-3 py-2 text-sm mb-2 text-center focus:outline-none focus:border-mint"
+          />
+          {existingScore !== null && (
+            <p className="text-xs text-sage mb-4">
+              This name has a current best of {Math.round(existingScore)} — you&apos;ll need to beat that to update the board.
+            </p>
+          )}
+          <button
+            onClick={submitName}
+            className="bg-mint text-canvas px-4 py-2 rounded-lg text-sm font-mono"
+          >
+            Start playing
+          </button>
+        </div>
+      ) : (
+        <>
+          <p className="text-sage mb-4">
+            Hover to reveal. Numbers show nearby bingo cards, deduce, don&apos;t guess.
+          </p>
 
-      <div className="relative left-1/2 -translate-x-1/2 w-screen flex justify-center">
-        <div className="w-[85vw] max-w-5xl">
-          <div className="relative w-full aspect-video rounded-lg overflow-hidden">
-            <video ref={videoRef} className="hidden" muted playsInline />
-            <canvas ref={canvasRef} className="w-full h-full -scale-x-100" />
+          <div className="flex flex-wrap gap-3 mb-8 font-mono text-xs items-center">
+            <span className="bg-mint-soft text-ink px-3 py-1 rounded-full">Level {level}</span>
+            <span className="bg-mint-soft text-ink px-3 py-1 rounded-full">
+              {found}/{configRef.current.bingoCount} found
+            </span>
+            <span className="bg-mint-soft text-ink px-3 py-1 rounded-full">Score {score}</span>
+            <button
+              onClick={() => { setShowLeaderboard(true); fetchLeaderboard(); }}
+              className="bg-mint text-canvas px-3 py-1 rounded-lg font-mono hover:opacity-90 transition-opacity"
+            >
+              Leaderboard
+            </button>
+          </div>
+
+          <div className="relative left-1/2 -translate-x-1/2 w-screen flex justify-center">
+            <div className="w-[85vw] max-w-5xl">
+              <div className="relative w-full aspect-video rounded-lg overflow-hidden">
+                <video ref={videoRef} className="hidden" muted playsInline />
+                <canvas ref={canvasRef} className="w-full h-full -scale-x-100" />
+              </div>
+            </div>
+          </div>
+
+        </>
+      )}
+
+      {showLeaderboard && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => setShowLeaderboard(false)}
+        >
+          <div
+            className="bg-canvas border border-hairline rounded-lg p-6 w-full max-w-sm mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-display text-lg font-semibold">Leaderboard</h2>
+              <button
+                onClick={() => setShowLeaderboard(false)}
+                className="text-sage hover:text-mint text-sm font-mono"
+              >
+                Close
+              </button>
+            </div>
+            <ol className="space-y-1 font-mono text-sm">
+              {leaderboard.map(([name, sc], i) => (
+                <li key={name} className="flex justify-between border-b border-hairline py-1">
+                  <span>{i + 1}. {name}</span>
+                  <span>{Math.round(sc)}</span>
+                </li>
+              ))}
+              {leaderboard.length === 0 && (
+                <li className="text-sage">No scores yet, be the first!</li>
+              )}
+            </ol>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

@@ -518,3 +518,82 @@ before proposing (or trusting) a specific explanation, rather than
 pattern-matching to the most recent similar-sounding lesson.
 
 ---
+
+## 2026-08-05 — Day 12: Redis leaderboard, a mid-session reliability check-in, and a real fix that followed from it
+
+**What happened:**
+Picked the project back up after a gap, audited the actual repo against the
+15-day plan (found the eval harness re-run from Day 9 was still unconfirmed,
+and a stray Three.js page had been added independently outside the tracked
+scope), then built the Redis leaderboard end to end: submission with
+anti-cheat, fetch, a name-availability check, retry/exception handling, and
+a short-TTL read cache with explicit write-time invalidation.
+
+**What I decided / how I fixed it:**
+
+*Real bugs, each diagnosed from actual evidence rather than guessed at:*
+- The leaderboard modal appeared to never update, across several plays.
+  Root cause, found only after fixing a silently-swallowed fetch error
+  (the same failure-hiding pattern flagged as a gap back on Day 9's error
+  handling): the local backend simply wasn't running —
+  `ERR_CONNECTION_REFUSED`, not a code bug at all. Surfacing real errors
+  instead of swallowing them turned a confusing "it's just broken" into an
+  immediately obvious, one-line fix.
+- The hand-tracking dwell/selection logic kept running even while the
+  leaderboard modal was open, since the modal's state lived in React state
+  the long-running animation loop's closure had already captured a stale
+  copy of. Fixed with a ref kept in sync via its own small effect — the
+  same closure-staleness class of bug as several earlier fixes this
+  project, just in a new location.
+
+*A genuine mid-session reliability dip, addressed directly rather than
+brushed past:*
+- Made two real mistakes in close succession: labeled a curl test as
+  proving one thing when the actual numbers given didn't exercise that
+  code path, and did work in tool calls without actually including the
+  runnable result in the message sent back. Asked directly about it,
+  answered honestly (long-context detail-tracking pressure, not "the model
+  getting worse") rather than deflecting, and changed process going
+  forward: precise file edits now get applied programmatically against the
+  actual current file content (exact-match assertions, structural balance
+  checks) before being presented, rather than reconstructed from memory of
+  a long thread and trusted on faith.
+
+*Design decisions made with reasoning shown, not just asserted:*
+- Chose to leave Upstash's eviction feature off — appropriate for a genuine
+  cache workload willing to lose old entries, wrong for a leaderboard where
+  every entry is a real score worth keeping; confirmed current free-tier
+  terms (256MB/500K commands/month, a real ongoing tier) before relying on
+  them.
+- Chose an *informational* name-availability hint over a hard "name taken"
+  block, since the system has no real authentication and can't actually
+  enforce exclusive ownership either way — a hard block would be friction
+  that looks like security without providing it.
+- Investigated whether "same session, skip the redundant check" was safe;
+  concluded no, since the backend has no real session concept and an
+  in-memory shortcut would reintroduce the exact multi-instance
+  inconsistency already learned from Chroma on Day 5.
+- Surveyed the general toolkit for reducing database call redundancy
+  (debounce, TTL caching, atomic conditional writes, Lua scripts,
+  pipelining, write-behind) before picking the one genuinely warranted
+  here (a short-TTL cache with write-time invalidation), rather than
+  reaching for the most sophisticated option by default.
+
+**Result:** a fully working leaderboard — submission, anti-cheat, fetch,
+name-availability hint, retry/exception handling, and redundancy reduction
+— confirmed end to end in the live game, plus a concrete process
+improvement adopted mid-session rather than just noted for later.
+
+**Why / what I'd do differently:**
+The most valuable thing about today wasn't any single bug fix — it was
+being asked directly about a real, noticed dip in reliability, and having
+an honest, specific answer available rather than either denying it or
+over-apologizing. The two actual mistakes were different in kind (a
+verification gap, and a communication gap), which matters: it means the
+fix is concrete and checkable (verify test claims before presenting them;
+verify a file was actually included in the response, not just built in a
+tool call) rather than a vague resolution to "be more careful." Worth
+continuing to apply the self-verification habit adopted today to future
+large or precise edits by default, not just when directly asked to.
+
+---

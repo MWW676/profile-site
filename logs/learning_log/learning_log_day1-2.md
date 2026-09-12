@@ -1628,3 +1628,155 @@ rather than continuing to iterate blindly. Notably contrasts with an
 earlier, unverified bug diagnosis in this same project (the Day 10 camera
 theory that turned out to be unnecessary) — this time, the claim was
 checked with real instrumentation before being treated as the answer.
+
+---
+
+# Learning log — Day 12 (and the tool-redundancy audit before it)
+
+## Auditing tool redundancy — the one real design test
+
+Before adding any tool to an agent, ask: *does this tool's output depend on
+its input?* If a tool takes no meaningful parameters and would return the
+exact same thing regardless of the question, it isn't a tool — it's static
+knowledge, and belongs directly in the system prompt instead. This single
+question caught two genuinely unnecessary tools (`get_project_details`,
+`get_fun_fact`) that were paying the cost of a full extra API round trip
+every time, just to fetch text that never changed. After removing them,
+only genuine resume questions cost two requests; everything else dropped
+to one.
+
+## Real-world token/cost management scenarios, generalized
+
+Classification/routing and content moderation at scale favor disabling
+thinking and using the cheapest model tier, since the task is closer to
+lookup than reasoning. Long multi-turn chat needs a sliding window or
+rolling summarization to avoid unbounded context growth. Summarizing
+something bigger than the context window uses map-reduce (chunk, summarize
+each, summarize the summaries). Repeated calls against one large static
+reference benefit from prompt/context caching. Agentic tool-calling loops
+need their intermediate tool *results* truncated before being fed back in,
+since raw API responses balloon context fast across iterations. Genuinely
+hard reasoning tasks are the one case where keeping thinking enabled,
+possibly at a higher budget, is the right call — not everything should be
+optimized toward "cheaper."
+
+## Redis sorted sets, and why they fit a leaderboard specifically
+
+A sorted set keeps every member ranked by an attached numeric score
+automatically, at all times — no separate sort step. `ZADD` inserts or
+updates a score in roughly logarithmic time regardless of how many members
+exist; `ZRANGE` fetches an already-sorted slice (like "top 10") just as
+cheaply. A generic database table could store the same name/score pairs,
+but would need to actively re-sort on every leaderboard read. This is
+specifically why Redis — not "Redis is fast" in the abstract, but "Redis
+has a data structure purpose-built for exactly this shape of problem."
+
+## How the leaderboard actually communicates
+
+The browser never talks to Redis directly — it only ever talks to our own
+backend, which is the one holding the database credentials. Submitting a
+score: read the existing score (`ZSCORE`), validate the new one against it,
+then write (`ZADD`) only if it passes. Fetching the board: ask Redis for
+the top 10, already sorted (`ZRANGE`), and forward that straight to the
+frontend. Three simple commands cover the entire feature.
+
+## Why "skip the check for the same session" isn't actually safe
+
+HTTP requests are stateless by default — our backend has no built-in way to
+verify "this request is genuinely a continuation of an earlier one" without
+adding real session/auth infrastructure. Trusting a client's unverified
+claim of continuity would let anyone bypass the anti-cheat delta check by
+simply asserting it. An in-memory server-side cache to skip the check would
+have the same failure mode already learned from Chroma on Day 5: it breaks
+the moment more than one backend instance exists, since each would have its
+own inconsistent view. The actual call frequency here (once per level
+clear, a human-paced event) was never a real performance problem worth
+trading correctness for.
+
+## Anti-cheat tied to real game mechanics, not arbitrary limits
+
+Since one level clear can never award more than 100 points, a new score
+submission jumping by more than that from the previously stored value is
+provably implausible and gets rejected — a check derived from the actual
+system's behavior, not a guessed ceiling.
+
+## No real identity, so "claiming" a name is informational, not enforced
+
+With no login/password anywhere in the system, exclusive ownership of a
+name genuinely can't be guaranteed no matter what's built — a hard "name
+taken" block would be friction that *looks* like security without actually
+providing it, and would also block the common legitimate case of the same
+real person returning in a fresh session. The chosen fix: show the
+existing score for a name as the player types (a debounced lookup, 500ms
+after typing pauses), informationally, without blocking submission either
+way.
+
+## Built-in SDK retry vs. hand-rolled retry
+
+`upstash-redis` ships its own retry mechanism (`rest_retries`,
+`rest_retry_interval` on the client), unlike `google-genai`, which needed
+a custom `call_with_retry` wrapper built from scratch on Day 7. Worth
+checking whether a client library already solves a problem before building
+a parallel solution — the fix here was configuring existing behavior
+explicitly, not writing new retry logic.
+
+## Fire-and-forget calls can afford more patient retry timing
+
+The live chat endpoint needed a tight retry policy specifically because a
+real person is watching a "thinking…" indicator the whole time. Leaderboard
+submissions are fire-and-forget from the frontend's perspective — gameplay
+never pauses waiting on them — so the SDK's more patient default retry
+timing carries no UX cost here, the opposite tradeoff from Day 7's chat
+decision. Same general principle (interactive vs. background call budgets),
+applied to the specific constraints of a different feature.
+
+## Catching an imprecisely-documented exception type
+
+Rather than guess at a specific exception class name from unclear SDK docs
+(a mistake already made once this project, with Gemini's exception types),
+caught broadly (`except Exception`) at each endpoint with full logging —
+an honest, explicit fallback when the precise type genuinely isn't
+confidently known, rather than a lazy shortcut.
+
+## Reducing Redis (or any database) call redundancy — the general toolkit
+
+- **Debounce/throttle at the source** — wait for input to settle before
+  firing a request, rather than reacting to every trigger (used for the
+  name-availability check).
+- **Cache reads with a short TTL, explicitly invalidated on write** — safe
+  when reads vastly outnumber writes and small staleness is acceptable;
+  critically, invalidate the cache the moment a real write happens, or a
+  read immediately after an update can serve stale data — exactly the bug
+  class this project already hit once with silently swallowed errors.
+- **Push conditional logic into the database atomically** — e.g. Redis's
+  `ZADD` supports a `GT` flag ("only write if greater"), collapsing a
+  read-then-decide-then-write sequence into one atomic round trip and
+  closing the small race-condition window between separate read and write
+  calls. For more complex atomic logic, a Lua script run server-side is
+  the standard, real-world answer.
+- **Pipelining** — batch multiple *independent* commands into one network
+  round trip (doesn't help when one command's result determines the next).
+- **Write-behind/batching** — accumulate high-frequency, low-priority
+  writes (like analytics counters) and flush periodically, rather than
+  writing on every single event; not a fit for data that needs to reflect
+  promptly, like a leaderboard.
+
+Applied here: a short TTL cache with explicit invalidation on the
+leaderboard read endpoint — real reduction in redundant calls, no
+correctness tradeoff, matching the actual read/write ratio (visitors view
+the board far more often than anyone sets a new high score). The atomic
+`ZADD GT`/Lua-script approach was consciously not built, since the race
+condition it would close has essentially zero real consequence at this
+project's scale — same judgment applied to several earlier scope decisions.
+
+## Self-verifying edits before presenting them
+
+Following a direct question about rising error rates mid-session, adopted
+a stricter discipline for precise file edits: apply proposed changes
+programmatically against the actual uploaded file content (exact string
+matching with assertions that a match occurs exactly once), check
+structural balance (e.g. matching open/close tag counts), and only then
+present the result — rather than presenting a diff reconstructed from
+memory of a long conversation and trusting it was correct. Directly
+addressed a real, named reliability concern rather than just promising to
+"be more careful."

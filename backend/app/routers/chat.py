@@ -1,7 +1,7 @@
 import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from google.genai.errors import ClientError
+from google.genai.errors import ClientError, ServerError
 from app.rag.chat import answer_question
 
 logger = logging.getLogger("uvicorn.error")
@@ -27,6 +27,12 @@ def chat(request: ChatRequest):
         raise HTTPException(
             status_code=502,
             detail="The assistant hit an upstream error. Please try again.",
+        )
+    except ServerError:
+        logger.warning("Gemini service temporarily unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail="The assistant is temporarily unavailable. Please try again shortly.",
         )
     except Exception:
         logger.exception("Unexpected error answering a chat question")
