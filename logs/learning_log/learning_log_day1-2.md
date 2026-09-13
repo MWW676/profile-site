@@ -1850,3 +1850,177 @@ not the actual protection — the password (and the token/HMAC check behind
 it) is what genuinely gates access. An unlinked-but-guessable URL with no
 real auth would be security theater; an unlinked URL *with* real auth is
 just tidiness, correctly not confused with the real security boundary.
+
+---
+
+# Learning log — Day 14: MCP server
+
+## What MCP actually is, and how it differs from Day 9's tool-calling
+
+A standardized protocol for connecting AI applications to external tools
+and data — the "USB-C for AI" framing — so that any MCP-compatible client
+can discover and use exposed capabilities without custom, one-off
+integration code per platform. The real distinction from Day 9: that
+tool-calling was wired directly into *our own* Gemini-powered backend,
+usable only by our own chatbot. An MCP server exposes the same *kind* of
+capability to **any** MCP-compatible client — someone could connect their
+own Claude Desktop to it and ask about the resume entirely outside the
+website.
+
+## Correcting the REST API analogy
+
+Superficially similar (client-server, request/response, can run over
+HTTP), but the genuine conceptual difference: with REST, the *developer
+writing client code* decides in advance which endpoint to call and when.
+With MCP, the client is an AI model that *discovers* the available tools
+at connection time and *decides for itself, at that moment*, based on a
+person's plain-language request, whether and how to use them — the same
+"automatic function calling" idea from Day 9, just standardized instead of
+hardcoded into one app. `Tools` do map reasonably onto "callable endpoints
+with parameters"; `Resources` map more to a plain read of static content —
+not a coincidence that the vocabulary overlaps with REST there.
+
+## Transport — stdio (local) vs. HTTP (remote)
+
+`stdio`: the client launches the server as a subprocess on the *same
+machine* and they communicate through a direct pipe — no network involved
+at all. `HTTP`: client and server can be on different machines, talking
+over the network like an ordinary web API. A local stdio server is the
+right scope for a personal project: no new hosting, no new
+authentication system to build, genuinely demoable with one command.
+
+## Real, current directories of published MCP servers
+
+Verified rather than assumed, given the ecosystem's fast pace: the
+official reference collection (`modelcontextprotocol/servers`, small
+teaching examples maintained by Anthropic), the official community
+registry (`modelcontextprotocol/registry`, an open "app store"-style
+index anyone can publish to), and third-party directories/marketplaces —
+Smithery, Glama, Pulse MCP — cataloging hundreds of community-built
+servers.
+
+## FastMCP, briefly
+
+Started as an independent open-source project; its core design was later
+folded into Anthropic's official SDK, while the original project continued
+separately as a more full-featured version (confirmed directly at 4.0.3
+after the initial search results returned genuinely contradictory
+information about package names and versions). Adds the decorator-based
+`@mcp.tool`/`@mcp.resource` syntax (auto-generating schemas from function
+signatures and docstrings) plus real developer tooling — `fastmcp dev
+inspector` for interactive testing, `fastmcp install <client>` for wiring
+a server directly into a real client.
+
+## The "widget marketplace" analogy, sharpened
+
+A genuinely useful mental model, with one key refinement: with an ordinary
+app-store widget, a *human* decides to install and use it. With MCP, the
+**AI model itself** reads a tool's description at runtime and decides
+whether to invoke it — which is exactly why a tool's *description* being
+misleading (see tool poisoning, below) is a real and different kind of risk
+than a widget simply not doing what its listing claims.
+
+## MCP security — verified findings, not just general caution
+
+Real, corroborated across multiple independent sources: **prompt
+injection** (malicious instructions hidden in data a tool returns, later
+read by the model as legitimate context); **tool poisoning** (a
+deceptive tool description tricking the model into calling something for
+the wrong reason, or a legitimate tool's behavior changing after initial
+trust was established); **credential/scope abuse** (a compromised or
+over-permissioned server exposing whatever its stored credentials can
+reach). Concrete severity: a 2025 scan of popular MCP servers found 43%
+had command-injection flaws, 22% allowed path traversal, 30% were
+SSRF-exploitable, many with no default authentication — serious enough
+that the NSA and CISA published formal MCP security guidance in 2026.
+Practical mitigations: least-privilege scoping per server (never one
+shared admin credential), explicit human confirmation before consequential
+actions (a real, existing Claude Desktop default, not just a
+recommendation), isolating untrusted third-party servers in a
+container/VM, OAuth 2.1 specifically required by the current spec for
+remote servers, and treating a third-party server like a dependency with
+production access — pin versions, read the actual tool definitions, watch
+for silent changes.
+
+## Is exposing an API key to the connecting model a general MCP
+requirement?
+
+No — a genuine misconception worth naming directly. Most real MCP tools
+(read a file, query a database, send a message) need no API key at all;
+ours only needed one because of a specific implementation choice
+(semantic search requiring an embedding call). This observation led
+directly to a real architecture decision: since the connecting client
+(Claude Desktop) is itself a full capable model with its own reasoning
+over a small context, the semantic-search layer wasn't actually earning
+its complexity for a 9-chunk resume — simplified to Resources-only,
+eliminating the need for any API key, and the entire credential-exposure
+question along with it. The same "does this genuinely need to be dynamic"
+test from Day 9's tool-redundancy audit, applied one level up, to a whole
+service design rather than one function.
+
+## Common MCP server design patterns, industry-wide
+
+The most typical shape by far: a thin adapter wrapping an already-existing
+service (a "GitHub MCP server" is a translation layer over GitHub's own
+REST API) — our resources-only server, serving static local content with
+no external service behind it, is actually the less common case, worth
+knowing where it sits relative to the norm. Production servers commonly
+separate read tools (lower risk) from write/mutate tools (genuinely
+consequential), sometimes shipping read-only by default and requiring
+explicit opt-in for anything destructive.
+
+## How secrets are protected in real MCP deployments
+
+Never hardcoded in server source (same discipline as every other secret
+this project has handled); injected at launch time via environment
+variables held in the *client's* local config, never committed anywhere;
+scoped as narrowly as possible per the same least-privilege principle as
+Day 13's admin route; for remote/multi-user servers, OAuth 2.1 replaces
+static keys with individually-authenticated, short-lived, revocable
+tokens instead of one shared secret; and a subtler risk worth remembering
+— a tool's *response text* itself should never accidentally echo a
+credential back into the model's context.
+
+## `fastmcp dev` is a command group, not a direct launcher
+
+`fastmcp dev mcp_server.py` fails — `dev` has its own subcommands
+(`apps`, `inspector`); the correct invocation is
+`fastmcp dev inspector mcp_server.py`. Verified directly against the
+installed package's own `--help` output rather than trusted from the
+earlier contradictory search results, given this exact area had already
+proven unreliable once this session.
+
+## The MCP Inspector, and what it actually is
+
+A standalone web UI that connects directly to one running server process,
+letting a human manually call tools and read resources before any real AI
+client is involved — a stand-in occupying the exact seat a real AI client
+would later fill. Useful distinction reinforced through direct use: the
+Inspector is *you* deciding what to invoke by clicking a button; a real
+client is the *model itself* making that same decision automatically from
+a plain-language request — same server, same menu, genuinely different
+decision-maker.
+
+## Real debugging: `uv`/PATH mismatch breaking a client-launched subprocess
+
+Confirmed via Claude Desktop's actual logs, not guessed: `fastmcp install`
+configured the client to launch the server via `uv` (a separate tool used
+internally for isolated dependency management), which had never actually
+been installed anywhere on the system — `"Failed to spawn process: No such
+file or directory"` in the log was the direct, literal evidence. A classic,
+well-documented class of MCP bug: GUI applications launched by
+double-clicking an icon don't inherit a terminal shell's `PATH`, so a
+command that works perfectly when run manually can fail silently when a
+client tries to launch it the same way. Fixed by installing `uv` via
+Homebrew into a location (`/opt/homebrew/bin`) already present in the
+client's search path, confirmed directly in the same log output.
+
+## Resources in a real client — a different interaction shape than tools
+
+Confirmed hands-on: unlike a Tool (invoked automatically by the model
+mid-conversation), Claude Desktop surfaces MCP Resources under a
+"Connectors" UI as content to be explicitly *attached* to a conversation
+(appearing as attached text content) rather than something silently
+called on the model's own initiative — a real, observed difference in
+interaction pattern between the two MCP primitive types, not just a
+conceptual one.

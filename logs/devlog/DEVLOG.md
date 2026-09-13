@@ -656,3 +656,77 @@ added to backend code, rather than rediscovering it via a failed
 deployment each time a new external service gets integrated.
 
 ---
+
+## 2026-09-13 — Day 14: MCP server, a genuine architecture simplification, and a real client-launch bug
+
+**What happened:**
+Built a standalone MCP server exposing resume content, verified it
+end-to-end first with the MCP Inspector, then connected it to a real
+client (Claude Desktop) after a genuine debugging detour. Along the way,
+a direct question about API key exposure led to dropping a whole feature
+rather than keeping it for its own sake.
+
+**What I decided / how I fixed it:**
+
+*A real architecture decision, not just a build task:*
+- Initially built `search_resume` as a genuine MCP Tool, reusing the Day
+  5-9 RAG pipeline (Chroma + Gemini embeddings) — which meant the server
+  needed `GEMINI_API_KEY` available to whatever process launched it. A
+  direct question ("is exposing an API key to the model a general MCP
+  requirement?") prompted actually questioning the design rather than just
+  answering the question as asked: since the connecting client is itself
+  a full capable model that can read a small resume's full content
+  directly, the semantic-search layer wasn't earning its complexity here.
+  Simplified to Resources-only — dropped `chromadb`/`google-genai` from
+  the MCP server's dependencies entirely, eliminating the API-key question
+  along with the feature that required it.
+
+*Verification discipline paid off twice today, in different ways:*
+- Web search results for MCP tooling came back genuinely contradictory
+  (conflicting package/class names, one source that looked outright
+  unreliable) — installed the real package in an isolated environment and
+  inspected its actual API directly (`FastMCP`, `.tool`, `.resource`,
+  `.run`) before writing anything permanent, rather than trusting the
+  search results as-is.
+- `fastmcp dev mcp_server.py` failed with "Unknown command" — checked the
+  CLI's own `--help` output directly rather than guess a second variant,
+  found `dev` is a command group requiring the `inspector` subcommand.
+
+*A dependency conflict resolved by genuinely separating environments,
+not just adjusting a pin:*
+- Adding `fastmcp` to the main `requirements.txt` produced a real,
+  unresolvable conflict (`fastapi` needs an older `starlette` ceiling than
+  `fastmcp` requires as a floor). Rather than fight two incompatible hard
+  constraints, gave the MCP server its own separate virtual environment
+  and its own minimal `requirements-mcp.txt` — a better architectural fit
+  anyway, since the MCP server and the web backend are separate programs
+  that never run in the same process.
+
+*A real client-launch bug, diagnosed from actual log evidence:*
+- After restarting Claude Desktop, the server showed as disconnected.
+  Rather than guess, pulled the real config Claude Desktop had generated
+  (`command: "uv"`) and its actual startup logs
+  (`"Failed to spawn process: No such file or directory"`) — confirmed
+  `uv` (used internally by `fastmcp install` for dependency management)
+  had never been installed anywhere on the system, and GUI-launched apps
+  don't inherit a terminal's `PATH` the way a manually-run command does.
+  Fixed with `brew install uv`, confirmed against the same log's own
+  reported search path.
+
+**Result:** a working MCP server, connected to and genuinely used from a
+real AI client (Claude Desktop) — resources attached to a live
+conversation and correctly read, not just verified in isolation via the
+Inspector — and a deliberately simpler, credential-free final design than
+the first working version.
+
+**Why / what I'd do differently:**
+The API-key question is the standout moment of the day: it would have
+been easy to just answer it and move on, but treating it as a genuine
+design prompt led to a real simplification rather than accepting
+unnecessary complexity because it happened to already be working. Worth
+generalizing beyond MCP specifically — "does this actually need to be
+dynamic/this complex" is a question worth re-asking any time a design
+decision is inherited from an earlier day's context rather than chosen
+deliberately for the task actually at hand.
+
+---
