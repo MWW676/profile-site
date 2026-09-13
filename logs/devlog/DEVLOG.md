@@ -730,3 +730,89 @@ decision is inherited from an earlier day's context rather than chosen
 deliberately for the task actually at hand.
 
 ---
+
+## 2026-09-13 — Project retro: closing out `profile-site`, in favor of a focused successor
+
+**What happened:**
+Reached Day 15 (final polish) and, before starting the styling pass,
+README, and demo video, did an honest review of the whole project against
+its original five objectives — then decided to redirect rather than
+finish every remaining item, since a new, more focused project (testing
+and AI safety/governance methods) is the actual next priority. This entry
+closes out `profile-site` as a body of work, rather than leaving it
+implicitly "still in progress."
+
+**Review against the original five objectives, verbatim from the
+project's kickoff:**
+1. *GenAI foundations (skill creation, agentic flows, testing, prompt
+   engineering, token management)* — strongly met. This was the most
+   thoroughly covered objective by a wide margin: content and prompts as
+   versioned files, a genuine evolution from fixed pipeline to real
+   tool-calling agent, an eval harness catching actual regressions, and a
+   sustained thread on token/context discipline across nearly every phase
+   of the build.
+2. *Architecture and modern cloud practices* — strongly met. Workload
+   Identity Federation instead of stored keys, a stateless backend
+   explicitly reasoned about rather than assumed (the Chroma local-disk
+   mistake, caught and fixed, directly informed later correct choices
+   like Redis and the MCP server's separate environment), consistent
+   secrets management throughout.
+3. *Hackathon-readiness* — substantially met, with real, named gaps: no
+   root README beyond the Next.js default, no demo video, no completed
+   styling consistency pass. The project has the right bones for this
+   objective but the final packaging was never finished.
+4. *Current, recognized tools* — strongly met. Next.js, FastAPI, Gemini,
+   Chroma, Redis, GitHub Actions, Cloud Run, Langfuse, MediaPipe, and MCP.
+5. *Image/video recognition for interactivity* — strongly met, arguably
+   exceeded, with two independent gesture-tracking experiences rather
+   than one.
+
+**One gap worth stating plainly rather than closing quietly:** the
+project's own stated "definition of done" required CI to run lint *and
+tests* on every push. Only linting was ever wired in — the eval harness
+has only ever run manually, by hand, across the entire project. This was
+found during the final review, not fixed, and deliberately handed
+forward rather than patched as an afterthought.
+
+**What I decided:**
+Rather than close that gap directly today, built a self-contained handoff
+document (`handoff-briefing-testing-project.md`) summarizing the real
+current state of the repo, its known gaps, and the specific places within
+it (the weak lexical jailbreak eval case from Day 8, the MCP server's
+security posture, the admin auth, the leaderboard anti-cheat) that are
+genuine, concrete starting points for the next project's actual focus —
+rather than treating the CI gap as something to quietly finish before
+"moving on." The unfinished eval-in-CI work becomes the new project's
+first real exercise instead of this project's last chore.
+
+**Why / what I'd do differently, looking back at the whole build:**
+A few patterns held up across the entire project, worth naming as the
+actual takeaways rather than any single day's specific fix:
+- **Verify before trusting, especially with fast-moving library APIs.**
+  Nearly every major stall this project hit (deprecated Gemini SDKs, the
+  `upstash-redis` exception-handling uncertainty, the MCP tooling's
+  genuinely contradictory search results, `fastmcp dev`'s real CLI shape)
+  was resolved faster once "check the actual installed package" became
+  the default move instead of trusting documentation or memory.
+- **The same "does this need to be this complex" question paid off
+  repeatedly, in very different contexts** — disabling Gemini's thinking
+  tokens (abandoned once genuinely tested against real constraints),
+  skipping shared Cloud Storage for Chroma, auditing which agent tools
+  were actually justified, and finally, dropping semantic search from the
+  MCP server entirely once a direct question exposed it wasn't earning
+  its complexity for a resume this size.
+- **Naming a limitation honestly was consistently more useful than
+  quietly working around it** — the jailbreak eval's real weakness, the
+  Langfuse span/generation gap, the CI-tests gap this entry documents. In
+  each case, the honest flag turned out to be more valuable later (as
+  concrete material for review, or now, as a literal starting point for
+  the next project) than a silent fix would have been.
+- **A long-running project accumulates real risk of detail drift**, and
+  the direct mid-project conversation about rising error rates led to a
+  genuinely better practice (verifying edits programmatically against
+  actual current files before presenting them) — worth carrying that
+  discipline forward as a default, not something reserved for when it's
+  pointed out.
+
+This closes `profile-site` as an active project. Work continues in a new
+chat, grounded in the handoff document above.
