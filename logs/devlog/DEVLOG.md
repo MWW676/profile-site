@@ -597,3 +597,62 @@ continuing to apply the self-verification habit adopted today to future
 large or precise edits by default, not just when directly asked to.
 
 ---
+
+## 2026-08-06 — Day 13: gated admin route, confirmed live
+
+**What happened:**
+Built a password-gated `/admin` route for leaderboard management: a login
+endpoint issuing an HMAC-based token, a reusable `Depends()`-based auth
+check shared across three protected routes (view full leaderboard, delete
+one entry, clear all), and a frontend page wired to it. Deployed and
+verified against the real live site, not just localhost.
+
+**What I decided / how I fixed it:**
+
+*Architecture decision, made deliberately rather than following the
+original plan by default:*
+- The original proposal sketched a signed cookie for the admin session.
+  Switched to a `sessionStorage`-held token sent via an `Authorization`
+  header instead, once it was clear a cross-domain cookie would need
+  `Secure`/HTTPS — which would silently break specifically during local
+  testing over plain HTTP, exactly the situation being tested in most.
+
+*Reused existing infrastructure rather than duplicating it:*
+- `admin.py` imports the already-connected Redis client and the cache
+  invalidation helper from `leaderboard.py`, rather than reconnecting or
+  reimplementing either — avoids two independently-drifting copies of the
+  same logic, most importantly the cache-invalidation path, where a
+  duplicate implementation could silently fail to match what the public
+  leaderboard endpoint actually checks.
+
+*The same deploy gap hit twice now, caught faster the second time:*
+- `ADMIN_PASSWORD` needed the same treatment as every other secret this
+  project has needed in a deployed environment: added to GitHub secrets
+  and appended to the same `@`-delimited `--set-env-vars` pattern already
+  established for `GEMINI_API_KEY`/`CORS_ORIGINS`/the two Upstash values.
+  Caught and fixed proactively this time, before attempting a deploy and
+  hitting the now-familiar "container failed to start" timeout, rather
+  than discovering it via a failed deployment again.
+
+*A real account-identity snag, unrelated to the feature itself:*
+- Mid-session, git push started failing with a permission error —
+  `fang407` had no access to a repo now living under a different GitHub
+  username (`MWW676`), almost certainly from an account rename. Fixed by
+  scoping the fix correctly: `git remote set-url` only affects this one
+  local repo's credentials, confirmed explicitly not to affect any other
+  project's separate git configuration before proceeding.
+
+**Result:** a real, working admin panel — verified end to end against the
+actual deployed URL, not just local: login, full leaderboard view (not
+just the public top 10), per-entry delete, and clear-all.
+
+**Why / what I'd do differently:**
+The Upstash deploy gap from two days ago repeated itself almost exactly —
+a new backend dependency needing credentials added to both local `.env`
+*and* the deploy workflow, with the second half nearly forgotten again.
+Worth treating "does this new dependency need a deploy-time secret" as a
+standing checklist item the moment any new `os.environ[...]` read is
+added to backend code, rather than rediscovering it via a failed
+deployment each time a new external service gets integrated.
+
+---

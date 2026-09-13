@@ -1780,3 +1780,73 @@ present the result — rather than presenting a diff reconstructed from
 memory of a long conversation and trusting it was correct. Directly
 addressed a real, named reliability concern rather than just promising to
 "be more careful."
+
+---
+
+# Learning log — Day 13: gated admin route
+
+## Why not a cookie, for cross-domain auth specifically
+
+A cookie is text the browser stores and — the key distinguishing property —
+attaches automatically to every future request to the site that set it,
+with zero code needed on the client's part. This is what "stay logged in"
+is built on almost everywhere. The catch: reliably sending a cookie across
+*different* domains requires it be marked `Secure` (HTTPS-only), which
+would silently fail specifically during local testing over plain HTTP —
+frontend and backend on separate Cloud Run URLs made this a real risk, not
+a theoretical one, so a self-managed token was chosen instead.
+
+## sessionStorage — the opposite of a cookie in one specific respect
+
+A small key-value store built into the browser, readable and writable only
+by JavaScript — nothing about it is ever sent anywhere automatically. Lives
+entirely client-side, scoped to one tab, cleared when that tab closes.
+Already used twice earlier in the project (the Play page's player name, the
+Ask Me chat history) before this third use for the admin token. Because
+nothing is automatic, the delivery mechanism has to be chosen and built
+deliberately — here, attaching the stored token to outgoing requests as an
+`Authorization: Bearer <token>` header.
+
+## HMAC — proving knowledge of a secret without transmitting it
+
+Takes a message plus a secret key, produces a fixed-length string that's
+effectively impossible to produce without knowing that key. The login flow:
+server computes `HMAC(password)` and returns it as a token; on every later
+request, rather than "hash what was sent and check it," the server
+independently *recomputes* what the correct token should be from its own
+stored password and compares the two already-computed values. No session
+table anywhere — the token re-proves itself fresh on every single check.
+`hmac.compare_digest` (not a plain `==`) matters specifically because naive
+string comparison can leak timing information usable to guess a value one
+character at a time.
+
+## FastAPI's `Depends()` — a reusable pre-check, not a value factory (usually)
+
+Write a check once as a plain function; any route that declares it as
+`Depends(that_function)` gets it run automatically before the route's own
+code executes. Comparable to a pytest fixture in spirit, but with a
+meaningful variant: a fixture can either hand back a value for the test to
+use, or simply perform a check and halt if something's wrong.
+`require_admin` is deliberately the second kind — declared as
+`_: None = Depends(require_admin)` specifically because nothing is wanted
+*back* from it, only the side effect of blocking bad requests before they
+reach real logic.
+
+## Reusing an existing connection instead of creating a second one
+
+Importing `redis`, `LEADERBOARD_KEY`, and `_invalidate_leaderboard_cache`
+from `leaderboard.py` into `admin.py` doesn't recreate a second Redis
+connection or duplicate a constant — Python's `import` always refers back
+to the *same* object already built once when the app started, never a
+fresh copy. Concretely, this guarantees `admin.py`'s delete operation
+invalidates the exact same cache the public leaderboard endpoint checks —
+duplicating that logic separately (even correctly) would risk two
+technically-different caches silently drifting apart.
+
+## Deliberately unlinked, not "hidden" as a security measure
+
+`/admin` was kept out of site navigation entirely, but this is a UX choice,
+not the actual protection — the password (and the token/HMAC check behind
+it) is what genuinely gates access. An unlinked-but-guessable URL with no
+real auth would be security theater; an unlinked URL *with* real auth is
+just tidiness, correctly not confused with the real security boundary.
