@@ -3,6 +3,7 @@ import logging
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+from pathlib import Path
 from langfuse import observe
 from app.rag.tools import search_resume
 from app.rag.retry import call_with_retry
@@ -11,7 +12,9 @@ load_dotenv()
 client_ai = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 logger = logging.getLogger("uvicorn.error")
 
-with open("app/prompts/ask_me_system.md") as f:
+CURRENT_DIR = Path(__file__).resolve().parent.parent
+sys_prompt_path = CURRENT_DIR / "prompts" / "ask_me_system.md"
+with open(sys_prompt_path) as f:
     SYSTEM_PROMPT = f.read()
 
 

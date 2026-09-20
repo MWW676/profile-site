@@ -2,3 +2,5 @@ chroma_db/
 .env
 .venv/
 .venv-mcp/
+htmlcov/
+.coverage
