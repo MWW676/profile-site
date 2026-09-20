@@ -4,3 +4,17 @@ chroma_db/
 .venv-mcp/
 htmlcov/
 .coverage
+chroma_db/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+chroma_db/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
